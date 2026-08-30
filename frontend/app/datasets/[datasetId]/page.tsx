@@ -1,55 +1,115 @@
-"use client";
+'use client';
 
-import React, { useState } from "react";
-import Link from "next/link";
-import { AppShell } from "@/components/layout/app-shell";
+import React, { useState, useEffect, use } from 'react';
+import Link from 'next/link';
+import { AppShell } from '@/components/layout/app-shell';
+import { DataGrid } from '@/components/data-grid/DataGrid';
+import { ChartEngine, VisualStrategySpec } from '@/components/charts/ChartEngine';
+import { datasetApi } from '@/lib/api-client';
 import {
   FileSpreadsheet,
   Table as TableIcon,
   BarChart2,
   Sparkles,
-  Search,
-  Filter,
+  ArrowLeft,
+  Zap,
   CheckCircle2,
   AlertCircle,
-  HelpCircle,
-  Zap,
-  ArrowLeft,
-  ChevronDown,
-} from "lucide-react";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from "recharts";
+  Loader2
+} from 'lucide-react';
 
-const MOCK_PREVIEW_ROWS = [
-  { id: 1, customer: "Acme Corp", region: "North America", segment: "Enterprise", plan: "Scale", mrr: 12500, status: "Active", renewal: "2026-11-15" },
-  { id: 2, customer: "Starlight Tech", region: "Europe", segment: "Enterprise", plan: "Scale", mrr: 8400, status: "Active", renewal: "2026-10-01" },
-  { id: 3, customer: "Nexus AI", region: "North America", segment: "Mid-Market", plan: "Growth", mrr: 3200, status: "Active", renewal: "2027-01-20" },
-  { id: 4, customer: "Pulse Labs", region: "Asia Pacific", segment: "SMB", plan: "Starter", mrr: 450, status: "Churn Risk", renewal: "2026-09-05" },
-  { id: 5, customer: "Vortex Gaming", region: "Europe", segment: "Mid-Market", plan: "Growth", mrr: 4100, status: "Active", renewal: "2026-12-12" },
-  { id: 6, customer: "Omni Global", region: "Latin America", segment: "Enterprise", plan: "Scale", mrr: 15000, status: "Active", renewal: "2027-03-30" },
-];
+interface DatasetDetailPageProps {
+  params: Promise<{ datasetId: string }>;
+}
 
-const MOCK_REGION_DISTRIBUTION = [
-  { region: "North America", count: 112 },
-  { region: "Europe", count: 78 },
-  { region: "Asia Pacific", count: 42 },
-  { region: "Latin America", count: 16 },
-];
+export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
+  const resolvedParams = use(params);
+  const datasetId = resolvedParams.datasetId;
 
-export default function DatasetDetailPage() {
-  const [activeTab, setActiveTab] = useState<"preview" | "profiling" | "clean">("preview");
+  const [dataset, setDataset] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'preview' | 'visualizations'>('preview');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const fetchDatasetDetails = async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const data = await datasetApi.getDatasetDetails(datasetId);
+      setDataset(data);
+      if (data.ai_analysis && data.ai_analysis.strategies) {
+        // If analysis already exists, show visualizations right away
+        setActiveTab('visualizations');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.detail || 'Failed to load dataset details.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (datasetId) {
+      fetchDatasetDetails();
+    }
+  }, [datasetId]);
+
+  const handleRunAiAnalysis = async () => {
+    setIsAiAnalyzing(true);
+    setErrorMsg(null);
+    try {
+      const res = await datasetApi.analyzeDataset(datasetId);
+      if (res.analysis) {
+        setDataset((prev: any) => ({
+          ...prev,
+          ai_analysis: res.analysis,
+        }));
+      }
+      // Auto navigate to visualizations tab on completion
+      setActiveTab('visualizations');
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.detail || 'AI analysis request failed.');
+    } finally {
+      setIsAiAnalyzing(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <AppShell>
+        <div className="max-w-7xl mx-auto p-12 text-center text-slate-400">
+          <Loader2 className="w-8 h-8 text-indigo-500 animate-spin mx-auto mb-4" />
+          <p className="text-xs">Loading dataset & DuckDB metadata...</p>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (errorMsg || !dataset) {
+    return (
+      <AppShell>
+        <div className="max-w-7xl mx-auto p-8 space-y-4">
+          <Link href="/datasets" className="text-xs text-indigo-400 flex items-center gap-1">
+            <ArrowLeft className="w-4 h-4" /> Back to datasets
+          </Link>
+          <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{errorMsg || 'Dataset not found.'}</span>
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
+  const columns = dataset.profile?.columns || [];
+  const rows = dataset.rows || [];
+  const strategies: VisualStrategySpec[] = dataset.ai_analysis?.strategies || [];
 
   return (
     <AppShell>
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Top Breadcrumb & Actions */}
+        {/* Top Header */}
         <div className="flex items-center justify-between border-b border-slate-800/60 pb-4">
           <div className="flex items-center gap-3">
             <Link
@@ -61,161 +121,122 @@ export default function DatasetDetailPage() {
             <div>
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
-                <h1 className="text-xl font-bold text-slate-100">q3_global_sales_transactions.csv</h1>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  Ready (DuckDB Scan)
+                <h1 className="text-xl font-bold text-slate-100">{dataset.name}</h1>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  DuckDB Ingested
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                248,500 rows &bull; 18 columns &bull; 42.5 MB &bull; Uploaded 10 mins ago
+                {dataset.total_rows?.toLocaleString()} rows &bull; {dataset.total_columns} columns &bull; Real DuckDB & OpenRouter Engine
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Link
-              href="/explore"
-              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md text-xs font-medium flex items-center gap-2 transition-all shadow-sm"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Query with AI
-            </Link>
-          </div>
+          <button
+            onClick={handleRunAiAnalysis}
+            disabled={isAiAnalyzing}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/20 transition-all disabled:opacity-50"
+          >
+            {isAiAnalyzing ? (
+              <>
+                <Loader2 className="w-4 h-4 text-cyan-200 animate-spin" />
+                <span>AI Analyzing & Computing Charts...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4 text-cyan-200" />
+                <span>Generate AI Visualizations</span>
+              </>
+            )}
+          </button>
         </div>
 
-        {/* Tab Navigation */}
+        {/* Navigation Tabs */}
         <div className="flex items-center gap-4 border-b border-slate-800">
           <button
-            onClick={() => setActiveTab("preview")}
+            onClick={() => setActiveTab('preview')}
             className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
-              activeTab === "preview"
-                ? "border-indigo-500 text-indigo-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
+              activeTab === 'preview'
+                ? 'border-indigo-500 text-indigo-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <TableIcon className="w-4 h-4" />
-            Data Preview & Grid
+            Data Grid View
           </button>
           <button
-            onClick={() => setActiveTab("profiling")}
+            onClick={() => setActiveTab('visualizations')}
             className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
-              activeTab === "profiling"
-                ? "border-indigo-500 text-indigo-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
+              activeTab === 'visualizations'
+                ? 'border-indigo-500 text-indigo-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <BarChart2 className="w-4 h-4" />
-            Data Profiling & Quality
+            AI Generated Visualizations ({strategies.length})
           </button>
         </div>
 
-        {/* Content based on tab */}
-        {activeTab === "preview" ? (
-          <div className="space-y-4">
-            {/* Search and Filters */}
-            <div className="flex items-center justify-between gap-4">
-              <div className="relative w-72">
-                <Search className="w-4 h-4 absolute left-3 top-2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Filter rows in grid..."
-                  className="w-full bg-slate-900 border border-slate-800 rounded-md pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-              <div className="text-xs text-slate-400 font-mono">
-                Showing 1-6 of 248,500 sample records
-              </div>
-            </div>
-
-            {/* Grid Table */}
-            <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl overflow-hidden shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800 bg-slate-950/80 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                      <th className="py-3 px-4"># ID</th>
-                      <th className="py-3 px-4">Customer</th>
-                      <th className="py-3 px-4">Region</th>
-                      <th className="py-3 px-4">Segment</th>
-                      <th className="py-3 px-4">Plan Tier</th>
-                      <th className="py-3 px-4">MRR ($)</th>
-                      <th className="py-3 px-4">Health Status</th>
-                      <th className="py-3 px-4">Renewal Date</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 text-xs font-mono">
-                    {MOCK_PREVIEW_ROWS.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-900/40 transition-colors">
-                        <td className="py-3 px-4 text-slate-500">{row.id}</td>
-                        <td className="py-3 px-4 text-slate-200 font-sans font-medium">{row.customer}</td>
-                        <td className="py-3 px-4 text-slate-300">{row.region}</td>
-                        <td className="py-3 px-4 text-slate-300">{row.segment}</td>
-                        <td className="py-3 px-4 text-indigo-400">{row.plan}</td>
-                        <td className="py-3 px-4 text-emerald-400 font-semibold">${row.mrr.toLocaleString()}</td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-sans ${
-                              row.status === "Active"
-                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                                : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                            }`}
-                          >
-                            {row.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-slate-400">{row.renewal}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+        {/* Tab Content */}
+        {activeTab === 'preview' ? (
+          <div className="h-[600px]">
+            <DataGrid
+              columns={columns}
+              rows={rows}
+              totalRows={dataset.total_rows}
+              isAiAnalyzing={isAiAnalyzing}
+              onRunAiAnalysis={handleRunAiAnalysis}
+            />
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Profiling Grid Summary */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
-                <div className="text-xs text-slate-400 mb-1">Completeness Score</div>
-                <div className="text-2xl font-bold text-emerald-400">98.4%</div>
-                <div className="text-[11px] text-slate-500 mt-1">4 non-critical null cells found</div>
-              </div>
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
-                <div className="text-xs text-slate-400 mb-1">Detected Primary Key</div>
-                <div className="text-sm font-semibold text-slate-200 font-mono">transaction_id (Unique)</div>
-                <div className="text-[11px] text-slate-500 mt-1">No duplicate rows detected</div>
-              </div>
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
-                <div className="text-xs text-slate-400 mb-1">Inferred Time Column</div>
-                <div className="text-sm font-semibold text-indigo-400 font-mono">created_at (Timestamp)</div>
-                <div className="text-[11px] text-slate-500 mt-1">Time range: Jan 2026 - Aug 2026</div>
+            <div className="flex items-center justify-between bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-semibold text-indigo-200 uppercase tracking-wide">
+                    OpenRouter AI & DuckDB Engine: {dataset.ai_analysis?.domain_context || 'NVIDIA Nemotron 3 Ultra 550B'}
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    {dataset.ai_analysis?.dataset_summary || 'Visual analytics generated dynamically based on frontend chart registry capabilities.'}
+                  </p>
+                </div>
               </div>
             </div>
 
-            {/* Categorical Distribution Breakdown */}
-            <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-5">
-              <h3 className="text-sm font-semibold text-slate-200 mb-1">Region Distribution Breakdown</h3>
-              <p className="text-xs text-slate-400 mb-4">Value frequency profiling for categorical field &apos;region&apos;</p>
-
-              <div className="h-48 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={MOCK_REGION_DISTRIBUTION}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
-                    <XAxis dataKey="region" stroke="#94a3b8" fontSize={11} />
-                    <YAxis stroke="#94a3b8" fontSize={11} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#0f172a",
-                        borderColor: "#334155",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                      }}
-                    />
-                    <Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+            {/* Lazy Skeleton Loading Grid when isAiAnalyzing */}
+            {isAiAnalyzing ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {[1, 2, 3, 4].map((idx) => (
+                  <div key={idx} className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4 animate-pulse">
+                    <div className="h-4 bg-slate-800 rounded w-1/3" />
+                    <div className="h-3 bg-slate-800/60 rounded w-2/3" />
+                    <div className="h-60 bg-slate-950/80 rounded-lg flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+            ) : strategies.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {strategies.map((strat) => (
+                  <ChartEngine key={strat.id} strategy={strat} />
+                ))}
+              </div>
+            ) : (
+              <div className="p-12 text-center text-slate-500 bg-slate-900/50 border border-slate-800 rounded-xl">
+                <p className="text-xs mb-3">No visual strategies generated yet.</p>
+                <button
+                  onClick={handleRunAiAnalysis}
+                  className="px-4 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-500 transition-colors"
+                >
+                  Generate Visualizations with OpenRouter & DuckDB
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
