@@ -1,9 +1,16 @@
-﻿from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore"
+    )
+
     # App
     APP_NAME: str = "DataViz AI"
     APP_VERSION: str = "0.1.0"
@@ -19,15 +26,23 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
-    # Database (PostgreSQL) - optional for initial dev
-    DATABASE_URL: str = "sqlite+aiosqlite:///./datavizai_dev.db"
+    # Database (PostgreSQL via Docker Compose)
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_DB: str = "datavizai"
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/datavizai"
 
     # Storage
     STORAGE_BACKEND: str = "local"
     LOCAL_STORAGE_PATH: str = "./storage"
 
     # AI / LLM
-    LLM_PROVIDER: str = "openai"
+    LLM_PROVIDER: str = "openrouter"
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENAI_API_KEY: str = ""
     GOOGLE_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
@@ -36,11 +51,6 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-this-secret-key-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
 
 
 @lru_cache()
