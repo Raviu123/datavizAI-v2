@@ -17,13 +17,15 @@ class OpenRouterAdapter(BaseLLMProvider):
         self.base_url = (base_url or settings.OPENROUTER_BASE_URL).rstrip("/")
         
     def _get_headers(self) -> Dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
+        clean_key = (self.api_key or "").strip()
+        if not clean_key:
+            raise ValueError("OPENROUTER_API_KEY is empty. Set your key in .env")
+        return {
+            "Authorization": f"Bearer {clean_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://datavizai.local",
             "X-Title": settings.APP_NAME,
         }
-        return headers
 
     async def generate(
         self, 
@@ -49,8 +51,13 @@ class OpenRouterAdapter(BaseLLMProvider):
                 json=payload,
             )
             response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+            res_json = response.json()
+
+            if "choices" not in res_json or not res_json["choices"]:
+                error_detail = res_json.get("error", {}).get("message") or str(res_json)
+                raise RuntimeError(f"OpenRouter API error: {error_detail}")
+
+            return res_json["choices"][0]["message"]["content"]
 
     async def analyze_json(
         self, 
@@ -78,7 +85,13 @@ class OpenRouterAdapter(BaseLLMProvider):
                 json=payload,
             )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            res_json = response.json()
+
+            if "choices" not in res_json or not res_json["choices"]:
+                error_detail = res_json.get("error", {}).get("message") or str(res_json)
+                raise RuntimeError(f"OpenRouter API error: {error_detail}")
+
+            content = res_json["choices"][0]["message"]["content"]
 
             # Robust JSON extraction
             cleaned = content.strip()
