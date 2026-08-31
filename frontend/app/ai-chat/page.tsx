@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/app-shell";
+import { ChartEngine } from "@/components/charts/ChartEngine";
+import { datasetApi } from "@/lib/api-client";
 import {
   MessageSquare,
   Sparkles,
@@ -12,166 +14,226 @@ import {
   Bot,
   User,
   Zap,
+  FileSpreadsheet,
+  Loader2,
+  AlertCircle
 } from "lucide-react";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from "recharts";
 
 interface Message {
   id: string;
   sender: "user" | "ai";
   text: string;
   sql?: string;
-  chartData?: any[];
+  visualization?: any;
   timestamp: string;
 }
 
-const INITIAL_MESSAGES: Message[] = [
-  {
-    id: "msg-1",
-    sender: "user",
-    text: "Why did revenue drop slightly in April?",
-    timestamp: "10:42 AM",
-  },
-  {
-    id: "msg-2",
-    sender: "ai",
-    text: "Revenue contracted by 5.6% in April primarily due to a seasonal decrease in mid-market self-serve renewals. Enterprise tier expansion remained positive at +4.2%.",
-    sql: `SELECT segment, SUM(mrr) as segment_mrr 
-FROM sales_transactions 
-WHERE month = 'Apr' 
-GROUP BY segment;`,
-    chartData: [
-      { segment: "Enterprise", segment_mrr: 50000 },
-      { segment: "Self-Serve", segment_mrr: 68000 },
-    ],
-    timestamp: "10:42 AM",
-  },
-];
-
 export default function AIChatPage() {
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
+  const [datasets, setDatasets] = useState<any[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>("");
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [isLoadingDatasets, setIsLoadingDatasets] = useState(true);
+  const [conversationId, setConversationId] = useState<string | undefined>();
 
-  const handleSend = (e: React.FormEvent) => {
+  // Fetch uploaded datasets on page load
+  useEffect(() => {
+    async function loadDatasets() {
+      try {
+        const res = await datasetApi.listDatasets();
+        const list = res.datasets || [];
+        setDatasets(list);
+        if (list.length > 0) {
+          setSelectedDatasetId(list[0].id);
+        }
+      } catch (err) {
+        console.error("Error listing datasets:", err);
+      } finally {
+        setIsLoadingDatasets(false);
+      }
+    }
+    loadDatasets();
+  }, []);
+
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || !selectedDatasetId) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       sender: "user",
       text: input,
-      timestamp: "Just now",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setMessages((prev) => [...prev, userMsg]);
+    const currentPrompt = input;
     setInput("");
     setIsTyping(true);
 
-    setTimeout(() => {
+    try {
+      const res = await datasetApi.chatWithData(selectedDatasetId, currentPrompt, conversationId);
+      if (res.conversation_id) {
+        setConversationId(res.conversation_id);
+      }
+
       const aiReply: Message = {
         id: (Date.now() + 1).toString(),
         sender: "ai",
-        text: `Analysis complete for "${input}". High confidence correlation detected with Q3 retention metrics.`,
-        sql: `SELECT region, COUNT(id) FROM active_users GROUP BY region ORDER BY 2 DESC;`,
-        timestamp: "Just now",
+        text: res.message || "Query executed successfully against dataset.",
+        sql: res.sql,
+        visualization: res.visualization,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
+
       setMessages((prev) => [...prev, aiReply]);
+    } catch (err: any) {
+      const errReply: Message = {
+        id: (Date.now() + 1).toString(),
+        sender: "ai",
+        text: err.response?.data?.detail || "Failed to process chat query with data.",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages((prev) => [...prev, errReply]);
+    } finally {
       setIsTyping(false);
-    }, 1000);
+    }
   };
+
+  const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
 
   return (
     <AppShell>
       <div className="max-w-5xl mx-auto h-[calc(100vh-8rem)] flex flex-col justify-between space-y-4">
         {/* Header */}
-        <div className="border-b border-slate-800/60 pb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="border-b border-slate-800/60 pb-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-100">AI Data Assistant</h1>
-              <p className="text-xs text-slate-400">Contextual natural language analysis on active datasets</p>
+              <h1 className="text-lg font-bold text-slate-100">Chat with Data AI Agent</h1>
+              <p className="text-xs text-slate-400">Natural language analytical queries converted into DuckDB SQL + Dynamic Charts</p>
             </div>
           </div>
-          <span className="text-xs text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded-full border border-indigo-500/20 flex items-center gap-1.5 font-mono">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            DuckDB SQL Agent Active
-          </span>
+
+          {/* Dataset Selector */}
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet className="w-4 h-4 text-indigo-400 shrink-0" />
+            {isLoadingDatasets ? (
+              <div className="text-xs text-slate-500 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> Loading datasets...
+              </div>
+            ) : datasets.length > 0 ? (
+              <select
+                value={selectedDatasetId}
+                onChange={(e) => {
+                  setSelectedDatasetId(e.target.value);
+                  setMessages([]);
+                  setConversationId(undefined);
+                }}
+                className="text-xs bg-slate-900 text-slate-200 border border-slate-700 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                {datasets.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.total_rows?.toLocaleString() ?? 0} rows)
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs text-amber-400 bg-amber-500/10 px-2 py-1 rounded border border-amber-500/20">
+                No active dataset uploaded
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Chat History */}
         <div className="flex-1 overflow-y-auto space-y-6 pr-2">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex items-start gap-3 ${
-                msg.sender === "user" ? "flex-row-reverse" : ""
-              }`}
-            >
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 ${
-                  msg.sender === "user"
-                    ? "bg-indigo-600 text-white"
-                    : "bg-slate-800 text-indigo-400 border border-slate-700"
-                }`}
-              >
-                {msg.sender === "user" ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center p-8 border border-dashed border-slate-800 rounded-2xl bg-slate-900/30">
+              <div className="p-3 rounded-full bg-indigo-500/10 text-indigo-400 mb-3">
+                <MessageSquare className="w-8 h-8" />
               </div>
-
-              <div
-                className={`max-w-2xl rounded-xl p-4 space-y-3 ${
-                  msg.sender === "user"
-                    ? "bg-indigo-600 text-white rounded-tr-none"
-                    : "bg-slate-900/80 border border-slate-800/80 text-slate-200 rounded-tl-none"
-                }`}
-              >
-                <p className="text-xs leading-relaxed">{msg.text}</p>
-
-                {msg.sql && (
-                  <div className="space-y-1.5 pt-2 border-t border-slate-800">
-                    <div className="flex items-center gap-1 text-[10px] text-slate-400 font-mono">
-                      <Code2 className="w-3 h-3 text-indigo-400" /> Auto-Generated DuckDB SQL:
-                    </div>
-                    <pre className="bg-slate-950 p-2.5 rounded text-[11px] font-mono text-indigo-300 border border-slate-800 overflow-x-auto">
-                      {msg.sql}
-                    </pre>
-                  </div>
-                )}
-
-                {msg.chartData && (
-                  <div className="pt-3 border-t border-slate-800">
-                    <div className="text-[11px] text-slate-400 mb-2 font-medium">Supporting Visualization:</div>
-                    <div className="h-40 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={msg.chartData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
-                          <XAxis dataKey="segment" stroke="#94a3b8" fontSize={10} />
-                          <YAxis stroke="#94a3b8" fontSize={10} />
-                          <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155", borderRadius: "6px", fontSize: "11px" }} />
-                          <Bar dataKey="segment_mrr" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                )}
-                <div className="text-[10px] text-slate-400 text-right">{msg.timestamp}</div>
-              </div>
+              <h3 className="text-sm font-semibold text-slate-200">Start Asking Questions About Your Dataset</h3>
+              <p className="text-xs text-slate-400 max-w-md mt-1">
+                Type questions like &ldquo;What are the top 5 revenue categories?&rdquo; or &ldquo;Show total sales over time&rdquo; to execute DuckDB queries and generate interactive charts.
+              </p>
+              {selectedDataset && (
+                <div className="mt-4 text-[11px] font-mono text-indigo-400 bg-indigo-950/60 px-3 py-1.5 rounded-lg border border-indigo-500/30">
+                  Target Dataset: {selectedDataset.name} &bull; {selectedDataset.total_rows} rows &bull; {selectedDataset.total_columns} cols
+                </div>
+              )}
             </div>
-          ))}
+          ) : (
+            messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex items-start gap-3 ${
+                  msg.sender === "user" ? "flex-row-reverse" : ""
+                }`}
+              >
+                <div
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs shrink-0 ${
+                    msg.sender === "user"
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-800 text-indigo-400 border border-slate-700"
+                  }`}
+                >
+                  {msg.sender === "user" ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+                </div>
+
+                <div
+                  className={`max-w-2xl rounded-xl p-4 space-y-3 ${
+                    msg.sender === "user"
+                      ? "bg-indigo-600 text-white rounded-tr-none"
+                      : "bg-slate-900/90 border border-slate-800 text-slate-200 rounded-tl-none shadow-xl"
+                  }`}
+                >
+                  <p className="text-xs leading-relaxed">{msg.text}</p>
+
+                  {msg.sql && (
+                    <div className="space-y-1.5 pt-2 border-t border-slate-800">
+                      <div className="flex items-center gap-1 text-[10px] text-slate-400 font-mono">
+                        <Code2 className="w-3 h-3 text-indigo-400" /> Auto-Generated DuckDB SQL:
+                      </div>
+                      <pre className="bg-slate-950 p-2.5 rounded text-[11px] font-mono text-indigo-300 border border-slate-800 overflow-x-auto">
+                        {msg.sql}
+                      </pre>
+                    </div>
+                  )}
+
+                  {msg.visualization && msg.visualization.data && msg.visualization.data.length > 0 && (
+                    <div className="pt-3 border-t border-slate-800">
+                      <div className="text-[11px] text-indigo-300 mb-2 font-medium flex items-center gap-1.5">
+                        <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Interactive Visual Result:</span>
+                      </div>
+                      <div className="w-full">
+                        <ChartEngine
+                          strategy={{
+                            id: `chat_vis_${msg.id}`,
+                            title: msg.visualization.title || "Query Result",
+                            description: "",
+                            chart_type: msg.visualization.chart_type || "bar",
+                            config: msg.visualization.config || {},
+                            data: msg.visualization.data || [],
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-500 text-right">{msg.timestamp}</div>
+                </div>
+              </div>
+            ))
+          )}
 
           {isTyping && (
-            <div className="flex items-center gap-2 text-xs text-slate-400 font-mono animate-pulse">
-              <Sparkles className="w-4 h-4 text-indigo-400" />
-              AI is analyzing dataset and writing DuckDB SQL query...
+            <div className="flex items-center gap-2 text-xs text-indigo-300 font-mono animate-pulse bg-slate-900/60 p-3 rounded-xl border border-slate-800 w-fit">
+              <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+              DuckDB SQL Engine analyzing dataset & generating response...
             </div>
           )}
         </div>
@@ -182,12 +244,14 @@ export default function AIChatPage() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask anything about your data in natural language..."
-            className="flex-1 bg-transparent px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+            disabled={!selectedDatasetId || isTyping}
+            placeholder={selectedDatasetId ? "Ask anything about your data in natural language..." : "Upload a dataset to enable chat..."}
+            className="flex-1 bg-transparent px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none disabled:opacity-50"
           />
           <button
             type="submit"
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all shadow-md shadow-indigo-600/20 shrink-0"
+            disabled={!selectedDatasetId || !input.trim() || isTyping}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all shadow-md shadow-indigo-600/20 shrink-0"
           >
             <Send className="w-3.5 h-3.5" /> Send Query
           </button>

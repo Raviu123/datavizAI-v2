@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { AppShell } from '@/components/layout/app-shell';
 import { DataGrid } from '@/components/data-grid/DataGrid';
 import { ChartEngine, VisualStrategySpec } from '@/components/charts/ChartEngine';
+import { ChartCandidatePickerModal, ChartCandidate } from '@/components/shared/ChartCandidatePickerModal';
+import { ExecutionLogViewer } from '@/components/shared/ExecutionLogViewer';
+import { DatasetChatSidebar } from '@/components/shared/DatasetChatSidebar';
 import { datasetApi } from '@/lib/api-client';
 import {
   FileSpreadsheet,
@@ -15,7 +18,9 @@ import {
   Zap,
   CheckCircle2,
   AlertCircle,
-  Loader2
+  Loader2,
+  Terminal,
+  Filter
 } from 'lucide-react';
 
 interface DatasetDetailPageProps {
@@ -30,20 +35,37 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
   const [activeTab, setActiveTab] = useState<'preview' | 'visualizations'>('preview');
   const [isLoading, setIsLoading] = useState(true);
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
+  const [isGeneratingSelected, setIsGeneratingSelected] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Chat Sidebar & Modal & Logging state
+  const [isChatOpen, setIsChatOpen] = useState(true);
+  const [candidates, setCandidates] = useState<ChartCandidate[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [isLogOpen, setIsLogOpen] = useState(false);
+
+  const addLog = (logMsg: string) => {
+    const time = new Date().toLocaleTimeString();
+    setLogs((prev) => [...prev, `[${time}] ${logMsg}`]);
+  };
 
   const fetchDatasetDetails = async () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
+      addLog(`Fetching dataset details for ID: ${datasetId}`);
       const data = await datasetApi.getDatasetDetails(datasetId);
       setDataset(data);
+      addLog(`Dataset '${data.name}' loaded successfully (${data.total_rows} rows).`);
+
       if (data.ai_analysis && data.ai_analysis.strategies) {
-        // If analysis already exists, show visualizations right away
         setActiveTab('visualizations');
       }
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || 'Failed to load dataset details.');
+      const msg = err.response?.data?.detail || 'Failed to load dataset details.';
+      setErrorMsg(msg);
+      addLog(`ERROR: ${msg}`);
     } finally {
       setIsLoading(false);
     }
@@ -55,23 +77,50 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
     }
   }, [datasetId]);
 
-  const handleRunAiAnalysis = async () => {
+  const handleOpenCandidatePicker = async () => {
     setIsAiAnalyzing(true);
     setErrorMsg(null);
+    addLog('Initiating AI Candidate Discovery step...');
     try {
-      const res = await datasetApi.analyzeDataset(datasetId);
+      const res = await datasetApi.fetchCandidates(datasetId);
+      if (res.logs) {
+        res.logs.forEach((l: string) => addLog(l));
+      }
+      setCandidates(res.candidates || []);
+      addLog(`Received ${res.candidates?.length || 0} doable chart candidates from AI backend engine.`);
+      setIsModalOpen(true);
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'AI candidate discovery failed.';
+      setErrorMsg(msg);
+      addLog(`ERROR: ${msg}`);
+    } finally {
+      setIsAiAnalyzing(false);
+    }
+  };
+
+  const handleConfirmCandidateSelection = async (selectedIds: string[], customCharts: any[]) => {
+    setIsGeneratingSelected(true);
+    addLog(`User confirmed selection of ${selectedIds.length} candidate charts and ${customCharts.length} custom combo charts.`);
+    try {
+      const res = await datasetApi.generateSelectedCharts(datasetId, selectedIds, customCharts);
+      if (res.logs) {
+        res.logs.forEach((l: string) => addLog(l));
+      }
       if (res.analysis) {
         setDataset((prev: any) => ({
           ...prev,
           ai_analysis: res.analysis,
         }));
       }
-      // Auto navigate to visualizations tab on completion
+      setIsModalOpen(false);
       setActiveTab('visualizations');
+      addLog('All selected charts successfully computed via DuckDB engine.');
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || 'AI analysis request failed.');
+      const msg = err.response?.data?.detail || 'Failed to generate selected charts.';
+      setErrorMsg(msg);
+      addLog(`ERROR: ${msg}`);
     } finally {
-      setIsAiAnalyzing(false);
+      setIsGeneratingSelected(false);
     }
   };
 
@@ -108,7 +157,7 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
 
   return (
     <AppShell>
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-[1600px] mx-auto space-y-6 relative pb-16 px-4">
         {/* Top Header */}
         <div className="flex items-center justify-between border-b border-slate-800/60 pb-4">
           <div className="flex items-center gap-3">
@@ -133,112 +182,164 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
             </div>
           </div>
 
-          <button
-            onClick={handleRunAiAnalysis}
-            disabled={isAiAnalyzing}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/20 transition-all disabled:opacity-50"
-          >
-            {isAiAnalyzing ? (
-              <>
-                <Loader2 className="w-4 h-4 text-cyan-200 animate-spin" />
-                <span>AI Analyzing & Computing Charts...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 text-cyan-200" />
-                <span>Generate AI Visualizations</span>
-              </>
-            )}
-          </button>
-        </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                isChatOpen
+                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-500/20'
+                  : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{isChatOpen ? 'Hide Chat Assistant' : 'Chat with Data'}</span>
+            </button>
 
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-4 border-b border-slate-800">
-          <button
-            onClick={() => setActiveTab('preview')}
-            className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
-              activeTab === 'preview'
-                ? 'border-indigo-500 text-indigo-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <TableIcon className="w-4 h-4" />
-            Data Grid View
-          </button>
-          <button
-            onClick={() => setActiveTab('visualizations')}
-            className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
-              activeTab === 'visualizations'
-                ? 'border-indigo-500 text-indigo-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <BarChart2 className="w-4 h-4" />
-            AI Generated Visualizations ({strategies.length})
-          </button>
-        </div>
+            <button
+              onClick={() => setIsLogOpen(!isLogOpen)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                isLogOpen
+                  ? 'bg-slate-800 text-indigo-400 border-indigo-500'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              <span>Logs ({logs.length})</span>
+            </button>
 
-        {/* Tab Content */}
-        {activeTab === 'preview' ? (
-          <div className="h-[600px]">
-            <DataGrid
-              columns={columns}
-              rows={rows}
-              totalRows={dataset.total_rows}
-              isAiAnalyzing={isAiAnalyzing}
-              onRunAiAnalysis={handleRunAiAnalysis}
-            />
+            <button
+              onClick={handleOpenCandidatePicker}
+              disabled={isAiAnalyzing}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/20 transition-all disabled:opacity-50"
+            >
+              {isAiAnalyzing ? (
+                <>
+                  <Loader2 className="w-4 h-4 text-cyan-200 animate-spin" />
+                  <span>Discovering AI Charts...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 text-cyan-200" />
+                  <span>AI Chart Recommendations</span>
+                </>
+              )}
+            </button>
           </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300">
-                  <Zap className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-semibold text-indigo-200 uppercase tracking-wide">
-                    OpenRouter AI & DuckDB Engine: {dataset.ai_analysis?.domain_context || 'NVIDIA Nemotron 3 Ultra 550B'}
-                  </h3>
-                  <p className="text-xs text-slate-300">
-                    {dataset.ai_analysis?.dataset_summary || 'Visual analytics generated dynamically based on frontend chart registry capabilities.'}
-                  </p>
-                </div>
-              </div>
+        </div>
+
+        {/* Main Content Layout with Persistent Right-Side Chat Sidebar */}
+        <div className="flex items-start gap-6">
+          {/* Main Workspace (Data Grid / Visualizations) */}
+          <div className={`flex-1 min-w-0 space-y-6 transition-all ${isChatOpen ? 'mr-96' : ''}`}>
+            {/* Navigation Tabs */}
+            <div className="flex items-center gap-4 border-b border-slate-800">
+              <button
+                onClick={() => setActiveTab('preview')}
+                className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
+                  activeTab === 'preview'
+                    ? 'border-indigo-500 text-indigo-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <TableIcon className="w-4 h-4" />
+                Data Grid View
+              </button>
+              <button
+                onClick={() => setActiveTab('visualizations')}
+                className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
+                  activeTab === 'visualizations'
+                    ? 'border-indigo-500 text-indigo-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <BarChart2 className="w-4 h-4" />
+                Visualizations ({strategies.length})
+              </button>
             </div>
 
-            {/* Lazy Skeleton Loading Grid when isAiAnalyzing */}
-            {isAiAnalyzing ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {[1, 2, 3, 4].map((idx) => (
-                  <div key={idx} className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4 animate-pulse">
-                    <div className="h-4 bg-slate-800 rounded w-1/3" />
-                    <div className="h-3 bg-slate-800/60 rounded w-2/3" />
-                    <div className="h-60 bg-slate-950/80 rounded-lg flex items-center justify-center">
-                      <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : strategies.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {strategies.map((strat) => (
-                  <ChartEngine key={strat.id} strategy={strat} />
-                ))}
+            {/* Tab Content */}
+            {activeTab === 'preview' ? (
+              <div className="h-[650px]">
+                <DataGrid
+                  columns={columns}
+                  rows={rows}
+                  totalRows={dataset.total_rows}
+                  isAiAnalyzing={isAiAnalyzing}
+                  onRunAiAnalysis={handleOpenCandidatePicker}
+                />
               </div>
             ) : (
-              <div className="p-12 text-center text-slate-500 bg-slate-900/50 border border-slate-800 rounded-xl">
-                <p className="text-xs mb-3">No visual strategies generated yet.</p>
-                <button
-                  onClick={handleRunAiAnalysis}
-                  className="px-4 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-500 transition-colors"
-                >
-                  Generate Visualizations with OpenRouter & DuckDB
-                </button>
+              <div className="space-y-6">
+                <div className="flex items-center justify-between bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300">
+                      <Zap className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-semibold text-indigo-200 uppercase tracking-wide">
+                        OpenRouter AI & DuckDB Engine: {dataset.ai_analysis?.domain_context || 'NVIDIA Nemotron 3 Ultra 550B'}
+                      </h3>
+                      <p className="text-xs text-slate-300">
+                        {dataset.ai_analysis?.dataset_summary || 'Visual analytics generated dynamically based on frontend chart registry capabilities.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleOpenCandidatePicker}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 text-xs font-medium transition-colors"
+                  >
+                    <Filter className="w-3.5 h-3.5" />
+                    <span>Customize / Add More Charts</span>
+                  </button>
+                </div>
+
+                {strategies.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {strategies.map((strat) => (
+                      <ChartEngine key={strat.id} strategy={strat} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-12 text-center text-slate-500 bg-slate-900/50 border border-slate-800 rounded-xl space-y-3">
+                    <p className="text-xs">No visual strategies created yet. Pick from AI candidates or build custom charts.</p>
+                    <button
+                      onClick={handleOpenCandidatePicker}
+                      className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-500 transition-colors shadow-lg shadow-indigo-500/20"
+                    >
+                      Open AI Chart Picker & Builder
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
+
+          {/* Persistent Right Side Chat Sidebar */}
+          <DatasetChatSidebar
+            datasetId={datasetId}
+            datasetName={dataset.name}
+            isOpen={isChatOpen}
+            onToggle={() => setIsChatOpen(!isChatOpen)}
+          />
+        </div>
+
+        {/* AI Chart Candidate Picker Modal */}
+        <ChartCandidatePickerModal
+          candidates={candidates}
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onConfirmSelection={handleConfirmCandidateSelection}
+          isLoading={isGeneratingSelected}
+        />
+
+        {/* Real-time Logs Console */}
+        <ExecutionLogViewer
+          logs={logs}
+          isOpen={isLogOpen}
+          onClose={() => setIsLogOpen(false)}
+          onClearLogs={() => setLogs([])}
+        />
       </div>
     </AppShell>
   );

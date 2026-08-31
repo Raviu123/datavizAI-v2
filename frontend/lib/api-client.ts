@@ -39,4 +39,29 @@ export const datasetApi = {
     });
     return response.data;
   },
+
+  fetchCandidates: async (datasetId: string) => {
+    const capabilities = getRegisteredCapabilities();
+    const response = await apiClient.post(`/datasets/${datasetId}/candidates`, {
+      supported_capabilities: capabilities,
+    });
+    return response.data;
+  },
+
+  generateSelectedCharts: async (datasetId: string, selectedCandidateIds: string[], customCharts?: any[]) => {
+    const response = await apiClient.post(`/datasets/${datasetId}/generate-selected`, {
+      selected_candidate_ids: selectedCandidateIds,
+      custom_charts: customCharts,
+    });
+    return response.data;
+  },
+
+  chatWithData: async (datasetId: string, message: string, conversationId?: string) => {
+    const response = await apiClient.post('/chat', {
+      dataset_id: datasetId,
+      message,
+      conversation_id: conversationId,
+    });
+    return response.data;
+  },
 };
