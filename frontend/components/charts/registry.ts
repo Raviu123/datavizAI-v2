@@ -75,7 +75,39 @@ export const CHART_REGISTRY: Record<string, RegisteredChartCapability> = {
     description: 'Dual-axis hybrid visualization combining bar metrics with trend lines',
     supportedAxes: ['category', 'datetime', 'numeric'],
     supportedAggregations: ['SUM', 'AVG', 'COUNT'],
-    features: ['dual-axis', 'bar-line-hybrid']
+    features: ['dual-axis', 'bar-line-hybrid', 'multi-series']
+  },
+  treemap: {
+    type: 'treemap',
+    name: 'Treemap Hierarchy',
+    description: 'Nested rectangular layout representing hierarchical proportional data volume',
+    supportedAxes: ['category', 'numeric'],
+    supportedAggregations: ['SUM', 'COUNT'],
+    features: ['nested-tiles', 'proportional-scaling', 'color-intensity']
+  },
+  funnel: {
+    type: 'funnel',
+    name: 'Funnel Stage Chart',
+    description: 'Visualizes stage-by-stage process conversion drop-offs and throughput retention',
+    supportedAxes: ['category', 'numeric'],
+    supportedAggregations: ['SUM', 'COUNT'],
+    features: ['conversion-stages', 'tapered-bars', 'dropoff-analysis']
+  },
+  gauge: {
+    type: 'gauge',
+    name: 'Gauge Target Dial',
+    description: 'Radial meter displaying key target progress and operational thresholds',
+    supportedAxes: ['numeric'],
+    supportedAggregations: ['SUM', 'AVG'],
+    features: ['progress-arc', 'target-indicator', 'threshold-status']
+  },
+  bubble: {
+    type: 'bubble',
+    name: '3D Bubble Plot',
+    description: 'Scatter plot extended with bubble radius reflecting a 3rd dimension metric',
+    supportedAxes: ['numeric', 'numeric', 'numeric'],
+    supportedAggregations: ['AVG', 'SUM', 'NONE'],
+    features: ['3D-metric-z-axis', 'variable-radii', 'cluster-scatter']
   },
   kpi: {
     type: 'kpi',
