@@ -1,24 +1,19 @@
 import duckdb
 import pandas as pd
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 class DuckDBEngine:
     """
-    DuckDB SQL analytical execution engine for dataset file queries and chart aggregations.
+    DuckDB SQL analytical execution engine for dataset file queries, trend analytics, and chart aggregations.
     """
     
     @staticmethod
-    def query_file(file_path: str, sql_query: str) -> List[Dict[str, Any]]:
-        """
-        Executes a SQL query against a dataset file (CSV, Parquet, Excel, JSON) using DuckDB.
-        Replaces 'dataset' table alias with read_csv_auto/read_parquet/read_json.
-        """
+    def _get_connection(file_path: str) -> duckdb.DuckDBPyConnection:
         ext = os.path.splitext(file_path)[1].lower()
         clean_path = str(file_path).replace("\\", "/")
         conn = duckdb.connect(database=':memory:')
 
-        # Register dataset table
         if ext == '.csv':
             conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
         elif ext == '.parquet':
@@ -31,6 +26,14 @@ class DuckDBEngine:
         else:
             conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
 
+        return conn
+
+    @staticmethod
+    def query_file(file_path: str, sql_query: str) -> List[Dict[str, Any]]:
+        """
+        Executes a SQL query against a dataset file (CSV, Parquet, Excel, JSON) using DuckDB.
+        """
+        conn = DuckDBEngine._get_connection(file_path)
         try:
             res_df = conn.execute(sql_query).fetchdf()
             records = res_df.to_dict(orient='records')
@@ -50,6 +53,34 @@ class DuckDBEngine:
             return cleaned
         finally:
             conn.close()
+
+    @staticmethod
+    def inspect_column_values(file_path: str, column_name: str, limit: int = 10) -> List[Any]:
+        """Returns distinct non-null sample values for a specific column."""
+        sql = f'SELECT DISTINCT "{column_name}" FROM dataset WHERE "{column_name}" IS NOT NULL LIMIT {limit}'
+        try:
+            res = DuckDBEngine.query_file(file_path, sql)
+            return [row.get(column_name) for row in res]
+        except Exception:
+            return []
+
+    @staticmethod
+    def detect_date_columns(file_path: str) -> List[str]:
+        """Detects date/timestamp columns in dataset schema."""
+        conn = DuckDBEngine._get_connection(file_path)
+        date_cols = []
+        try:
+            df_info = conn.execute("DESCRIBE dataset").fetchdf()
+            for _, row in df_info.iterrows():
+                col_name = row['column_name']
+                col_type = str(row['column_type']).lower()
+                if any(t in col_type for t in ['date', 'timestamp', 'time']):
+                    date_cols.append(col_name)
+        except Exception:
+            pass
+        finally:
+            conn.close()
+        return date_cols
 
     @staticmethod
     def generate_chart_data(file_path: str, x_axis: str, y_axis: str, agg: str = "SUM", limit: int = 15) -> List[Dict[str, Any]]:
