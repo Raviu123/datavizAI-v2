@@ -157,9 +157,9 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
 
   return (
     <AppShell>
-      <div className="max-w-[1600px] mx-auto space-y-6 relative pb-16 px-4">
+      <div className="max-w-[1600px] mx-auto h-[calc(100vh-7rem)] flex flex-col space-y-4 relative px-4 overflow-hidden pb-4">
         {/* Top Header */}
-        <div className="flex items-center justify-between border-b border-slate-800/60 pb-4">
+        <div className="flex items-center justify-between border-b border-slate-800/60 pb-3 shrink-0">
           <div className="flex items-center gap-3">
             <Link
               href="/datasets"
@@ -227,10 +227,10 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
           </div>
         </div>
 
-        {/* Main Content Layout with Persistent Right-Side Chat Sidebar */}
-        <div className="flex items-start gap-6">
+        {/* Main Content Layout with In-Page Resizable Chat Sidebar */}
+        <div className="flex-1 min-h-0 flex items-stretch gap-6">
           {/* Main Workspace (Data Grid / Visualizations) */}
-          <div className={`flex-1 min-w-0 space-y-6 transition-all ${isChatOpen ? 'mr-96' : ''}`}>
+          <div className="flex-1 min-w-0 flex flex-col min-h-0 space-y-4 overflow-y-auto pr-1">
             {/* Navigation Tabs */}
             <div className="flex items-center gap-4 border-b border-slate-800">
               <button
@@ -259,7 +259,7 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
 
             {/* Tab Content */}
             {activeTab === 'preview' ? (
-              <div className="h-[650px]">
+              <div className="flex-1 min-h-0 h-full">
                 <DataGrid
                   columns={columns}
                   rows={rows}
@@ -315,12 +315,12 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
             )}
           </div>
 
-          {/* Persistent Right Side Chat Sidebar */}
+          {/* In-Page Resizable Chat Assistant Panel */}
           <DatasetChatSidebar
             datasetId={datasetId}
             datasetName={dataset.name}
             isOpen={isChatOpen}
-            onToggle={() => setIsChatOpen(!isChatOpen)}
+            onToggle={() => setIsChatOpen(false)}
           />
         </div>
 

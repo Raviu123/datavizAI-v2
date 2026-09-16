@@ -4,6 +4,8 @@ import React, { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { ChartEngine } from "@/components/charts/ChartEngine";
 import { datasetApi } from "@/lib/api-client";
+import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
+import { CollapsibleQueryDetails } from "@/components/shared/CollapsibleQueryDetails";
 import {
   MessageSquare,
   Sparkles,
@@ -191,18 +193,12 @@ export default function AIChatPage() {
                       : "bg-slate-900/90 border border-slate-800 text-slate-200 rounded-tl-none shadow-xl"
                   }`}
                 >
-                  <p className="text-xs leading-relaxed">{msg.text}</p>
+                  <MarkdownRenderer content={msg.text} />
 
-                  {msg.sql && (
-                    <div className="space-y-1.5 pt-2 border-t border-slate-800">
-                      <div className="flex items-center gap-1 text-[10px] text-slate-400 font-mono">
-                        <Code2 className="w-3 h-3 text-indigo-400" /> Auto-Generated DuckDB SQL:
-                      </div>
-                      <pre className="bg-slate-950 p-2.5 rounded text-[11px] font-mono text-indigo-300 border border-slate-800 overflow-x-auto">
-                        {msg.sql}
-                      </pre>
-                    </div>
-                  )}
+                  <CollapsibleQueryDetails
+                    sql={msg.sql}
+                    chartDataCount={msg.visualization?.data?.length}
+                  />
 
                   {msg.visualization && msg.visualization.data && msg.visualization.data.length > 0 && (
                     <div className="pt-3 border-t border-slate-800">
