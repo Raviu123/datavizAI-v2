@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import sys
 from app.config import settings
 
@@ -13,6 +13,8 @@ def setup_logging() -> None:
     )
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

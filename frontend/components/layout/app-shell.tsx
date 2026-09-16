@@ -16,8 +16,8 @@ import {
 
 const navigation = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
+  { name: "Live Dashboards", href: "/data-sources", icon: Link2 },
   { name: "Datasets", href: "/datasets", icon: Database },
-  { name: "Data Sources", href: "/data-sources", icon: Link2 },
   { name: "Explore & Query", href: "/explore", icon: Compass },
   { name: "Dashboards", href: "/dashboards", icon: BarChart3 },
   { name: "AI Assistant", href: "/ai-chat", icon: MessageSquare },

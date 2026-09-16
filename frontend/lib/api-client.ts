@@ -65,3 +65,32 @@ export const datasetApi = {
     return response.data;
   },
 };
+
+export const liveDataSourceApi = {
+  listDataSources: async () => {
+    const response = await apiClient.get('/data-sources');
+    return response.data;
+  },
+
+  connectLiveSourceUrl: async (name: string, sourceUrl: string, refreshIntervalSeconds = 5) => {
+    const response = await apiClient.post('/data-sources/connect-url', {
+      name,
+      source_url: sourceUrl,
+      refresh_interval_seconds: refreshIntervalSeconds,
+    });
+    return response.data;
+  },
+
+  approveCandidates: async (sourceId: string, selectedCandidateIds: string[]) => {
+    const response = await apiClient.post(`/data-sources/${sourceId}/approve-candidates`, {
+      source_id: sourceId,
+      selected_candidate_ids: selectedCandidateIds,
+    });
+    return response.data;
+  },
+
+  pollLiveDataFeed: async (sourceId: string) => {
+    const response = await apiClient.get(`/data-sources/${sourceId}/poll-live-data`);
+    return response.data;
+  },
+};

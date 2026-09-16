@@ -31,13 +31,22 @@ export default function DashboardsPage() {
               Interactive multi-widget dashboards powered by natural language queries and DuckDB.
             </p>
           </div>
-          <Link
-            href="/datasets"
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md text-xs font-medium flex items-center gap-2 transition-all shadow-md shadow-indigo-600/20"
-          >
-            <Plus className="w-4 h-4" />
-            Upload Dataset to Build Dashboard
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/data-sources"
+              className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-md text-xs font-semibold flex items-center gap-2 transition-all shadow-md shadow-indigo-600/20"
+            >
+              <Sparkles className="w-4 h-4 text-cyan-200" />
+              <span>Build Real-Time Live Dashboard</span>
+            </Link>
+            <Link
+              href="/datasets"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md text-xs font-medium flex items-center gap-2 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Upload Dataset</span>
+            </Link>
+          </div>
         </div>
 
         {/* Dashboards Grid */}

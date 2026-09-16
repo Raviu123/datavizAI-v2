@@ -1,4 +1,4 @@
-﻿# DataViz AI
+# DataViz AI
 
 AI-powered data intelligence and visualization platform.
 
@@ -47,8 +47,48 @@ App: http://localhost:3000
 | Analytics Engine | DuckDB |
 | Data Processing | Pandas, PyArrow |
 | File Formats | Parquet, CSV, Excel, JSON |
-| App Database | SQLite (dev) → PostgreSQL (prod) |
+| App Database | PostgreSQL (Primary DB via Docker Compose) |
+| Caching & Tasks | Redis (In-Memory Data Store) |
+| Analytics Engine | DuckDB (OLAP Query Engine for Dataframes & Parquet) |
 | Storage | Local (dev) → S3-compatible (prod) |
+
+## Database Setup & Management
+
+This project uses **PostgreSQL** as the primary relational database, **Redis** for caching/tasks, and **DuckDB** as an embedded analytical engine for query processing.
+
+### 1. PostgreSQL & Redis (via Docker Compose)
+
+The primary database and cache services run as Docker containers defined in [`docker-compose.yml`](file:///C:/Users/Ravinarayana%20U/projects/datavizai/docker-compose.yml).
+
+#### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+
+#### Start Database Services
+To start PostgreSQL and Redis in detached mode:
+```bash
+docker compose up -d
+```
+
+#### Stop Database Services
+```bash
+docker compose down
+```
+
+#### Check Status & Logs
+```bash
+docker compose ps
+docker compose logs -f postgres
+```
+
+#### Connection Details
+- **Host**: `localhost`
+- **Port**: `5432`
+- **Database**: `datavizai`
+- **User / Password**: `postgres` / `postgres`
+- **Async Connection String**: `postgresql+asyncpg://postgres:postgres@localhost:5432/datavizai`
+
+### 2. DuckDB (Embedded Analytics Engine)
+- **DuckDB** is an embedded in-process SQL database engine used by the FastAPI backend to process tabular datasets (CSV, Parquet, JSON, Excel) at high speed without needing a separate service or container to start.
 
 ## Architecture
 
