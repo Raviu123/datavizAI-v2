@@ -40,7 +40,7 @@ async def chat_with_data(request: ChatRequest):
     d = DATASETS_DB[dataset_id]
     conv_id = request.conversation_id or str(uuid.uuid4())
 
-    logger.info(f"💬 [Chat Request] Dataset: '{d['name']}' | Message: \"{request.message}\"")
+    logger.info(f"[Chat Request] Dataset: '{d['name']}' | Message: \"{request.message}\"")
 
     agent = DataAnalystAgent()
     agent_res = await agent.process_query(d, request.message)

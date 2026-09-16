@@ -8,28 +8,33 @@ from app.core.logging import get_logger
 logger = get_logger("app.ai.agent")
 
 AGENT_SYSTEM_PROMPT = """
-You are an expert Data Analyst & Autonomous Analytics Agent (inspired by PandasAI).
-Your goal is to parse user questions about a dataset and output accurate DuckDB SQL queries or analytical metadata summaries.
+You are an expert Data Analyst & Autonomous Analytics Agent.
+Your goal is to parse user questions about a dataset and output accurate DuckDB SQL queries.
 
 Schema & Context:
 - Table Name: `dataset`
 - Exact Column Names, Types, and Profiles are provided in the prompt.
-- Always use double quotes around column names in SQL (e.g. `SELECT "Sales Rep", SUM("Sales Amount") FROM dataset`).
+- Always use double quotes around column names in SQL (e.g. `SELECT DISTINCT "Product_Category" FROM dataset`).
 
 Query Generation Guidelines:
-1. **Trend & Time-Series Queries** (e.g., "sales trend", "monthly revenue", "over time"):
+
+1. **Listing & Distinct Value Inquiries** (e.g. "which are all the products available?", "list products", "show all sales reps", "what categories exist"):
+   - Find the matching column (e.g., `Product_Category`, `Product_ID`, `Sales_Rep`, `Region`).
+   - Generate: `SELECT DISTINCT "Column_Name" FROM dataset WHERE "Column_Name" IS NOT NULL ORDER BY 1 LIMIT 50`.
+   - Set `"intent": "sql_query"`.
+
+2. **Trend & Time-Series Queries** (e.g., "sales trend", "monthly revenue", "over time"):
    - Use date truncation or strftime: `SELECT STRFTIME(TRY_CAST("Date" AS DATE), '%Y-%m') AS "Month", SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE "Date" IS NOT NULL GROUP BY 1 ORDER BY 1`.
-   - Mark `"wants_chart": true` and `"chart_type": "line"`.
+   - Set `"wants_chart": true` and `"chart_type": "line"`.
 
-2. **Quarterly Queries** (e.g., "Q3 sales", "quarterly performance", "sales in Q1"):
-   - Filter or aggregate by quarter: `SELECT EXTRACT(QUARTER FROM TRY_CAST("Date" AS DATE)) AS "Quarter", SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE "Date" IS NOT NULL GROUP BY 1 ORDER BY 1`.
-   - If user asks specifically for Q3, add `WHERE EXTRACT(QUARTER FROM TRY_CAST("Date" AS DATE)) = 3`.
+3. **Quarterly & Filtered Queries** (e.g., "sales of electronics in 2nd quarter", "Q3 sales"):
+   - Filter by Quarter and Category: `SELECT SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE EXTRACT(QUARTER FROM TRY_CAST("Date" AS DATE)) = 2 AND "Product_Category" = 'Electronics'`.
 
-3. **Comparative / Categorical Queries** (e.g., "top 5 regions", "sales by category"):
+4. **Comparative & Top N Queries** (e.g., "top 5 products by revenue", "sales by region"):
    - Use `GROUP BY` and `ORDER BY ... DESC LIMIT N`.
-   - Mark `"wants_chart": true` and `"chart_type": "bar"`.
+   - Set `"wants_chart": true` and `"chart_type": "bar"`.
 
-4. **Overview / Schema Metadata Queries** (ONLY if prompt asks purely to describe dataset, explain structure, or list columns without metrics):
+5. **Pure Metadata Overview** (ONLY if prompt explicitly asks "describe dataset metadata" or "what dataset is this" without asking for items, products, metrics, or rows):
    - Set `"intent": "overview"` and `"sql": null`.
 
 Return ONLY a valid raw JSON object:
@@ -51,9 +56,9 @@ QueryResult Data (JSON):
 {query_data}
 
 Instructions:
-1. State exact numerical totals, key trends, peak periods, or top categories clearly.
-2. If this is a time-series or quarterly trend, highlight growth, peaks, or drops across periods.
-3. Keep the answer professional, concise, and formatted with clean markdown bullet points.
+1. State exact items, numerical totals, key trends, peak periods, or top categories clearly.
+2. If query returned a list of distinct items/products/names, present them cleanly as a bulleted or comma-separated list.
+3. Keep the answer professional, concise, and formatted with clean markdown.
 """
 
 OVERVIEW_SYNTHESIS_PROMPT = """
@@ -78,7 +83,7 @@ Instructions:
 class DataAnalystAgent:
     """
     PandasAI-inspired Agentic Data Analyst Engine supporting tool calls, 
-    resilient SQL execution with auto-correction, temporal aggregations, and smart visualization selection.
+    resilient SQL execution with auto-correction, temporal aggregations, distinct value listing, and smart visualization selection.
     """
 
     def __init__(self, provider_name: Optional[str] = None):
@@ -100,20 +105,31 @@ class DataAnalystAgent:
 
         logger.info(f"[Agentic Analyst] Processing question: '{user_message}' on dataset '{d_name}'")
 
-        # Step 1: Check for explicit overview keywords vs analytical metrics
-        metric_keywords = ["sale", "sales", "revenue", "profit", "cost", "trend", "q1", "q2", "q3", "q4", "month", "quarter", "year", "growth", "top", "highest", "lowest", "sum", "average", "avg", "total", "count", "compare", "category", "region"]
+        # Intent classification heuristics
+        listing_keywords = [
+            "list", "show", "get", "find", "display", "all", "which", "available", 
+            "avaibalbe", "product", "products", "item", "items", "category", "categories", 
+            "rep", "reps", "names", "values", "what products", "what categories", "who are"
+        ]
+        has_listing_intent = any(k in msg_lower for k in listing_keywords)
+
+        metric_keywords = [
+            "sale", "sales", "revenue", "profit", "cost", "trend", "q1", "q2", "q3", "q4", 
+            "month", "quarter", "year", "growth", "top", "highest", "lowest", "sum", "average", 
+            "avg", "total", "count", "compare", "region"
+        ]
         has_metric_keywords = any(k in msg_lower for k in metric_keywords)
 
         is_pure_overview = (
-            any(k in msg_lower for k in ["describe", "overview", "summary", "columns", "structure", "explain dataset"])
-            and not has_metric_keywords
+            any(k in msg_lower for k in ["describe dataset", "overview of dataset", "what dataset is this", "dataset structure"])
+            and not (has_metric_keywords or has_listing_intent)
         )
 
         if is_pure_overview:
             logger.info("[Agentic Analyst] Routing to pure dataset metadata overview synthesis.")
             return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
 
-        # Step 2: Build detailed schema context for LLM SQL compilation
+        # Build schema context for LLM SQL compilation
         prompt = f"""
 Dataset Name: {d_name}
 Total Rows: {profile.get('total_rows', 0)}
@@ -139,15 +155,21 @@ User Question: "{user_message}"
         ai_reply_text = ""
 
         try:
-            # Step 3: LLM SQL & Strategy Compilation
+            # LLM SQL Compilation
             logger.info("[Agentic Analyst] Compiling DuckDB SQL strategy...")
             sql_payload = await self.provider.analyze_json(prompt=prompt, system_prompt=AGENT_SYSTEM_PROMPT)
             sql_query = sql_payload.get("sql")
             wants_chart = sql_payload.get("wants_chart", False)
             chart_type = sql_payload.get("chart_type", "bar")
 
+            # Fallback heuristic for listing queries if LLM omitted SQL
+            if not sql_query and has_listing_intent:
+                target_col = next((c for c in col_names if any(k in c.lower() for k in ["product", "item", "category", "rep", "name", "region"])), cat_cols[0] if cat_cols else col_names[0])
+                if target_col:
+                    sql_query = f'SELECT DISTINCT "{target_col}" FROM dataset WHERE "{target_col}" IS NOT NULL ORDER BY 1 LIMIT 50'
+
             # Fallback heuristic for trend/time queries if LLM omitted SQL
-            if not sql_query and any(k in msg_lower for k in ["trend", "month", "quarter", "q1", "q2", "q3", "q4", "over time", "year"]):
+            elif not sql_query and any(k in msg_lower for k in ["trend", "month", "quarter", "q1", "q2", "q3", "q4", "over time", "year"]):
                 d_col = date_cols[0] if date_cols else next((c for c in col_names if "date" in c.lower() or "time" in c.lower()), col_names[0] if col_names else "")
                 m_col = num_cols[0] if num_cols else col_names[1] if len(col_names) > 1 else col_names[0]
                 if d_col and m_col:
