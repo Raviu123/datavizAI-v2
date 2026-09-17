@@ -9,14 +9,14 @@ logger = get_logger("app.ai.agent")
 
 AGENT_SYSTEM_PROMPT = """
 You are an expert Data Analyst & Autonomous Analytics Agent.
-Your goal is to parse user questions about a dataset and output accurate DuckDB SQL queries.
+Your goal is to parse user questions about a dataset and output accurate DuckDB SQL queries or identify out-of-scope questions.
 
 Schema & Context:
 - Table Name: `dataset`
 - Exact Column Names, Types, and Profiles are provided in the prompt.
 - Always use double quotes around column names in SQL (e.g. `SELECT DISTINCT "Product_Category" FROM dataset`).
 
-Query Generation Guidelines:
+Query Generation & Intent Guidelines:
 
 1. **Listing & Distinct Value Inquiries** (e.g. "which are all the products available?", "list products", "show all sales reps", "what categories exist"):
    - Find the matching column (e.g., `Product_Category`, `Product_ID`, `Sales_Rep`, `Region`).
@@ -25,23 +25,27 @@ Query Generation Guidelines:
 
 2. **Trend & Time-Series Queries** (e.g., "sales trend", "monthly revenue", "over time"):
    - Use date truncation or strftime: `SELECT STRFTIME(TRY_CAST("Date" AS DATE), '%Y-%m') AS "Month", SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE "Date" IS NOT NULL GROUP BY 1 ORDER BY 1`.
-   - Set `"wants_chart": true` and `"chart_type": "line"`.
+   - Set `"intent": "sql_query"`, `"wants_chart": true` and `"chart_type": "line"`.
 
 3. **Quarterly & Filtered Queries** (e.g., "sales of electronics in 2nd quarter", "Q3 sales"):
    - Filter by Quarter and Category: `SELECT SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE EXTRACT(QUARTER FROM TRY_CAST("Date" AS DATE)) = 2 AND "Product_Category" = 'Electronics'`.
+   - Set `"intent": "sql_query"`.
 
 4. **Comparative & Top N Queries** (e.g., "top 5 products by revenue", "sales by region"):
    - Use `GROUP BY` and `ORDER BY ... DESC LIMIT N`.
-   - Set `"wants_chart": true` and `"chart_type": "bar"`.
+   - Set `"intent": "sql_query"`, `"wants_chart": true` and `"chart_type": "bar"`.
 
-5. **Pure Metadata Overview** (ONLY if prompt explicitly asks "describe dataset metadata" or "what dataset is this" without asking for items, products, metrics, or rows):
+5. **Pure Metadata Overview** (ONLY if prompt explicitly asks "describe dataset metadata", "overview of dataset", "what dataset is this", "explain dataset structure"):
    - Set `"intent": "overview"` and `"sql": null`.
+
+6. **Irrelevant / Out-of-Scope Questions** (e.g. "who is donald trump?", "what is the capital of France?", "tell me a joke", "how to code python", general non-data questions unrelated to dataset analysis):
+   - Set `"intent": "irrelevant"` and `"sql": null`.
 
 Return ONLY a valid raw JSON object:
 {
-  "intent": "sql_query" | "overview",
-  "sql": "SELECT ... FROM dataset ...",
-  "explanation": "Brief explanation of query strategy...",
+  "intent": "sql_query" | "overview" | "irrelevant",
+  "sql": "SELECT ... FROM dataset ..." or null,
+  "explanation": "Brief explanation...",
   "wants_chart": boolean,
   "chart_type": "line" | "bar" | "pie" | "scatter"
 }
@@ -80,6 +84,16 @@ Instructions:
 2. Suggest 2-3 specific analytical questions the user can ask next (e.g., "What is the sales trend over time?", "Top 5 products by revenue").
 """
 
+IRRELEVANT_RESPONSE = (
+    "I am your dedicated **Data Analyst AI Assistant** focused exclusively on analyzing your uploaded dataset.\n\n"
+    "Your question appears to be unrelated to data analysis or the current dataset. "
+    "Please ask a question related to your data, such as:\n"
+    "- *What are the total sales by region?*\n"
+    "- *Which are all the products available?*\n"
+    "- *Show sales trend over time*\n"
+    "- *What is the average discount given?*"
+)
+
 class DataAnalystAgent:
     """
     PandasAI-inspired Agentic Data Analyst Engine supporting tool calls, 
@@ -116,12 +130,12 @@ class DataAnalystAgent:
         metric_keywords = [
             "sale", "sales", "revenue", "profit", "cost", "trend", "q1", "q2", "q3", "q4", 
             "month", "quarter", "year", "growth", "top", "highest", "lowest", "sum", "average", 
-            "avg", "total", "count", "compare", "region"
+            "avg", "total", "count", "compare", "region", "discount", "quantity", "price"
         ]
         has_metric_keywords = any(k in msg_lower for k in metric_keywords)
 
         is_pure_overview = (
-            any(k in msg_lower for k in ["describe dataset", "overview of dataset", "what dataset is this", "dataset structure"])
+            any(k in msg_lower for k in ["describe dataset", "overview of dataset", "what dataset is this", "dataset structure", "explain dataset"])
             and not (has_metric_keywords or has_listing_intent)
         )
 
@@ -158,6 +172,21 @@ User Question: "{user_message}"
             # LLM SQL Compilation
             logger.info("[Agentic Analyst] Compiling DuckDB SQL strategy...")
             sql_payload = await self.provider.analyze_json(prompt=prompt, system_prompt=AGENT_SYSTEM_PROMPT)
+            
+            intent = sql_payload.get("intent", "sql_query")
+            if intent == "irrelevant":
+                logger.info("[Agentic Analyst] Question classified as irrelevant / out-of-scope.")
+                return {
+                    "message": IRRELEVANT_RESPONSE,
+                    "sql": None,
+                    "chart_data": None,
+                    "visualization": None
+                }
+
+            if intent == "overview":
+                logger.info("[Agentic Analyst] LLM classified question as overview request.")
+                return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
+
             sql_query = sql_payload.get("sql")
             wants_chart = sql_payload.get("wants_chart", False)
             chart_type = sql_payload.get("chart_type", "bar")
