@@ -35,10 +35,15 @@ Query Generation & Intent Guidelines:
    - Use `GROUP BY` and `ORDER BY ... DESC LIMIT N`.
    - Set `"intent": "sql_query"`, `"wants_chart": true` and `"chart_type": "bar"`.
 
-5. **Pure Metadata Overview** (ONLY if prompt explicitly asks "describe dataset metadata", "overview of dataset", "what dataset is this", "explain dataset structure"):
+5. **Conversational Follow-up Questions** (e.g. "which region had the highest?", "now filter by electronics", "what about Q3?", "break that down by rep"):
+   - Use the Previous Conversation Context to understand what metrics/dimensions the user is asking about.
+   - Formulate the corresponding DuckDB SQL query. NEVER classify follow-up questions about the data as irrelevant.
+   - Set `"intent": "sql_query"`.
+
+6. **Pure Metadata Overview** (ONLY if prompt explicitly asks "describe dataset metadata", "overview of dataset", "what dataset is this", "explain dataset structure"):
    - Set `"intent": "overview"` and `"sql": null`.
 
-6. **Irrelevant / Out-of-Scope Questions** (e.g. "who is donald trump?", "what is the capital of France?", "tell me a joke", "how to code python", general non-data questions unrelated to dataset analysis):
+7. **Irrelevant / Out-of-Scope Questions** (e.g. "who is donald trump?", "what is the capital of France?", "tell me a joke", "how to code python", general non-data questions unrelated to dataset analysis):
    - Set `"intent": "irrelevant"` and `"sql": null`.
 
 Return ONLY a valid raw JSON object:
@@ -103,7 +108,12 @@ class DataAnalystAgent:
     def __init__(self, provider_name: Optional[str] = None):
         self.provider = LLMProviderFactory.get_provider(provider_name)
 
-    async def process_query(self, dataset_record: Dict[str, Any], user_message: str) -> Dict[str, Any]:
+    async def process_query(
+        self, 
+        dataset_record: Dict[str, Any], 
+        user_message: str,
+        history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
         d_name = dataset_record.get("name", "dataset")
         profile = dataset_record.get("profile", {})
         file_path = dataset_record.get("file_path")
@@ -143,12 +153,22 @@ class DataAnalystAgent:
             logger.info("[Agentic Analyst] Routing to pure dataset metadata overview synthesis.")
             return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
 
+        # Format historical turns for context
+        history_text = ""
+        if history:
+            formatted_turns = []
+            for turn in history[-4:]:
+                role = "User" if turn.get("role") == "user" else "Assistant"
+                sql_context = f" (SQL was: {turn.get('sql')})" if turn.get("sql") else ""
+                formatted_turns.append(f"{role}: {turn.get('message', '')}{sql_context}")
+            history_text = f"\nPrevious Conversation Context (Use for context on follow-up questions):\n" + "\n".join(formatted_turns) + "\n"
+
         # Build schema context for LLM SQL compilation
         prompt = f"""
 Dataset Name: {d_name}
 Total Rows: {profile.get('total_rows', 0)}
 Total Columns: {profile.get('total_columns', 0)}
-
+{history_text}
 Columns & Inferred Types:
 {json.dumps(cols, indent=2)}
 

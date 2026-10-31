@@ -1,9 +1,10 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.core.logging import setup_logging
+from app.db.session import init_db
 from app.api.router import api_router
 
 
@@ -12,6 +13,7 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     print(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    await init_db()
     yield
     # Shutdown
     print(f"Shutting down {settings.APP_NAME}")

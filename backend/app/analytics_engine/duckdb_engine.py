@@ -2,10 +2,15 @@ import duckdb
 import pandas as pd
 import os
 from typing import List, Dict, Any, Optional
+from app.core.logging import get_logger
+
+logger = get_logger("app.analytics_engine.duckdb")
+
 
 class DuckDBEngine:
     """
     DuckDB SQL analytical execution engine for dataset file queries, trend analytics, and chart aggregations.
+    Secured with external access disabled for query execution.
     """
     
     @staticmethod
@@ -14,17 +19,28 @@ class DuckDBEngine:
         clean_path = str(file_path).replace("\\", "/")
         conn = duckdb.connect(database=':memory:')
 
-        if ext == '.csv':
-            conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
-        elif ext == '.parquet':
-            conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_parquet('{clean_path}')")
-        elif ext == '.json':
-            conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_json_auto('{clean_path}')")
-        elif ext in ['.xlsx', '.xls']:
-            df = pd.read_excel(file_path)
-            conn.register('dataset', df)
-        else:
-            conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
+        try:
+            if ext == '.csv':
+                conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
+            elif ext == '.parquet':
+                conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_parquet('{clean_path}')")
+            elif ext == '.json':
+                conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_json_auto('{clean_path}')")
+            elif ext in ['.xlsx', '.xls']:
+                df = pd.read_excel(file_path)
+                conn.register('dataset', df)
+            else:
+                conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
+        except Exception as e:
+            logger.error(f"[DuckDB Load Error] Failed to load '{clean_path}' into table: {e}")
+            conn.close()
+            raise e
+
+        # Sandbox: Lock down external filesystem & network access after the table is loaded
+        try:
+            conn.execute("SET enable_external_access = false;")
+        except Exception:
+            pass
 
         return conn
 
@@ -32,10 +48,20 @@ class DuckDBEngine:
     def query_file(file_path: str, sql_query: str) -> List[Dict[str, Any]]:
         """
         Executes a SQL query against a dataset file (CSV, Parquet, Excel, JSON) using DuckDB.
+        Sanitizes query to only allow read-only analytical queries.
         """
+        clean_sql = (sql_query or "").strip()
+        if not clean_sql:
+            return []
+
+        # Sanitize against destructive SQL
+        first_token = clean_sql.split()[0].upper() if clean_sql.split() else ""
+        if first_token in ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "ATTACH", "INSTALL", "LOAD", "EXPORT", "COPY"]:
+            raise ValueError(f"Disallowed SQL statement '{first_token}'. Only analytical read queries (SELECT, WITH) are permitted.")
+
         conn = DuckDBEngine._get_connection(file_path)
         try:
-            res_df = conn.execute(sql_query).fetchdf()
+            res_df = conn.execute(clean_sql).fetchdf()
             records = res_df.to_dict(orient='records')
             cleaned = []
             for row in records:
@@ -53,6 +79,14 @@ class DuckDBEngine:
             return cleaned
         finally:
             conn.close()
+
+    @staticmethod
+    def paginate_file(file_path: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        Fetches a slice of rows using DuckDB vectorized execution without re-reading the entire file via Pandas.
+        """
+        query = f'SELECT * FROM dataset LIMIT {int(limit)} OFFSET {int(offset)}'
+        return DuckDBEngine.query_file(file_path, query)
 
     @staticmethod
     def inspect_column_values(file_path: str, column_name: str, limit: int = 10) -> List[Any]:

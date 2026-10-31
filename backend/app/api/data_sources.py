@@ -1,39 +1,49 @@
 import uuid
-import json
 import httpx
+import duckdb
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 from app.analytics_engine.profiler import DataProfiler
-from app.analytics_engine.duckdb_engine import DuckDBEngine
 from app.ai.providers.factory import LLMProviderFactory
 from app.ai.prompts.strategy_prompt import SYSTEM_PROMPT, build_analysis_prompt
+from app.db.models import DataSourceModel
+from app.db.session import get_db
 
 router = APIRouter()
 
-# In-memory store for connected Live Data Sources
-LIVE_DATA_SOURCES: Dict[str, Dict[str, Any]] = {}
 
 class ConnectLiveSourceRequest(BaseModel):
     name: str
     source_url: str
     refresh_interval_seconds: int = 5
-    source_type: str = "rest_stream"  # shopify / rest_stream / weather / custom
+    source_type: str = "rest_stream"
+
 
 class ApprovedLiveDashboardRequest(BaseModel):
     source_id: str
     selected_candidate_ids: List[str]
 
+
 @router.get("")
-async def list_data_sources():
-    """List all connected live data sources."""
-    sources = list(LIVE_DATA_SOURCES.values())
-    return {"data_sources": sources, "total": len(sources)}
+async def list_data_sources(db: AsyncSession = Depends(get_db)):
+    """List all connected live data sources from the database."""
+    stmt = select(DataSourceModel).order_by(desc(DataSourceModel.created_at))
+    result = await db.execute(stmt)
+    sources = result.scalars().all()
+    source_dicts = [s.to_dict() for s in sources]
+    return {"data_sources": source_dicts, "total": len(source_dicts)}
+
 
 @router.post("/connect-url")
-async def connect_live_source_url(body: ConnectLiveSourceRequest):
+async def connect_live_source_url(
+    body: ConnectLiveSourceRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Step 1: Connect to a Live Source URL (e.g. http://localhost:8000/api/v1/mock/shopify/live-orders).
     Fetches initial payload, profiles streaming schema, and returns AI visual candidates for user approval.
@@ -80,7 +90,6 @@ async def connect_live_source_url(body: ConnectLiveSourceRequest):
         dataset_summary = ai_res.get("dataset_summary", dataset_summary)
         domain_context = ai_res.get("domain_context", domain_context)
     except Exception as e:
-        print(f"LLM Live Analysis fallback: {e}")
         # Dynamic Candidate Fallbacks
         numeric_cols = [c["name"] for c in profile.get("columns", []) if c.get("inferred_type") in ["integer", "float", "numeric"]]
         cat_cols = [c["name"] for c in profile.get("columns", []) if c.get("inferred_type") == "categorical"]
@@ -99,7 +108,7 @@ async def connect_live_source_url(body: ConnectLiveSourceRequest):
             candidates.append({
                 "id": "live_cand_2",
                 "title": f"Live Proportional Share ({cat_name})",
-                "description": f"Donut share distribution of real-time incoming orders.",
+                "description": "Donut share distribution of real-time incoming orders.",
                 "chart_type": "donut",
                 "suitability_score": 0.91,
                 "recommended": True,
@@ -108,28 +117,29 @@ async def connect_live_source_url(body: ConnectLiveSourceRequest):
             candidates.append({
                 "id": "live_cand_3",
                 "title": f"Live Hierarchy Treemap ({cat_name})",
-                "description": f"Proportional rectangle volume scaled to live transactions.",
+                "description": "Proportional rectangle volume scaled to live transactions.",
                 "chart_type": "treemap",
                 "suitability_score": 0.88,
                 "recommended": False,
                 "config": {"xAxisKey": cat_name, "yAxisKeys": [num_name], "colorPalette": ["#ec4899", "#8b5cf6"]}
             })
 
-    source_record = {
-        "id": source_id,
-        "name": body.name,
-        "source_url": url,
-        "refresh_interval_seconds": body.refresh_interval_seconds,
-        "source_type": body.source_type,
-        "profile": profile,
-        "candidates": candidates,
-        "dataset_summary": dataset_summary,
-        "domain_context": domain_context,
-        "status": "connected",
-        "last_updated": pd.Timestamp.now().isoformat()
-    }
-
-    LIVE_DATA_SOURCES[source_id] = source_record
+    source_record = DataSourceModel(
+        id=source_id,
+        name=body.name,
+        source_url=url,
+        refresh_interval_seconds=body.refresh_interval_seconds,
+        source_type=body.source_type,
+        status="connected",
+        profile=profile,
+        candidates=candidates,
+        approved_candidates=candidates[:2],
+        dataset_summary=dataset_summary,
+        domain_context=domain_context,
+    )
+    db.add(source_record)
+    await db.commit()
+    await db.refresh(source_record)
 
     return {
         "status": "success",
@@ -142,18 +152,25 @@ async def connect_live_source_url(body: ConnectLiveSourceRequest):
         "candidates": candidates
     }
 
+
 @router.get("/{source_id}/poll-live-data")
-async def poll_live_data_feed(source_id: str):
+async def poll_live_data_feed(
+    source_id: str,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Step 2: Real-Time Live Feed Endpoint.
-    Polls the connected Live Source URL, recalculates charts dynamically via DuckDB, 
-    and streams updated data points back to the real-time frontend dashboard.
+    Polls the connected Live Source URL, calculates aggregate chart data via DuckDB in-memory queries,
+    and returns updated data points to the frontend dashboard.
     """
-    if source_id not in LIVE_DATA_SOURCES:
+    stmt = select(DataSourceModel).where(DataSourceModel.id == source_id)
+    result = await db.execute(stmt)
+    source = result.scalar_one_or_none()
+
+    if not source:
         raise HTTPException(status_code=404, detail="Live Data Source not found")
 
-    source = LIVE_DATA_SOURCES[source_id]
-    url = source["source_url"]
+    url = source.source_url
 
     # Poll live URL
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -170,33 +187,34 @@ async def poll_live_data_feed(source_id: str):
     elif isinstance(raw_payload, dict):
         records = raw_payload.get("orders") or raw_payload.get("data") or raw_payload.get("items") or [raw_payload]
 
-    # Load into memory DuckDB table
+    # Query in-memory table using DuckDB
     df = pd.DataFrame(records)
-    conn = DuckDBEngine.query_file
+    conn = duckdb.connect(database=":memory:")
+    conn.register("live_records", df)
 
     computed_charts = []
-    approved_candidates = source.get("approved_candidates") or source.get("candidates") or []
+    approved_candidates = source.approved_candidates or source.candidates or []
 
     for cand in approved_candidates:
         cfg = cand.get("config", {})
         x_axis = cfg.get("xAxisKey")
         y_keys = cfg.get("yAxisKeys", [])
         y_axis = y_keys[0] if y_keys else x_axis
-        agg = cfg.get("aggregation", "SUM")
+        agg = cfg.get("aggregation", "SUM").upper()
+        if agg not in ["SUM", "AVG", "COUNT", "MIN", "MAX"]:
+            agg = "SUM"
 
         chart_data = []
         if x_axis and x_axis in df.columns:
             try:
-                # Query in-memory DataFrame via DuckDB logic
                 if y_axis in df.columns and x_axis != y_axis:
-                    grouped = df.groupby(x_axis)[y_axis].sum().reset_index().sort_values(by=y_axis, ascending=False).head(15)
-                    chart_data = grouped.to_dict(orient="records")
+                    sql = f'SELECT "{x_axis}" as "{x_axis}", {agg}("{y_axis}") as "{y_axis}" FROM live_records GROUP BY "{x_axis}" ORDER BY "{y_axis}" DESC LIMIT 15'
                 else:
-                    counts = df[x_axis].value_counts().reset_index().head(15)
-                    counts.columns = [x_axis, "count"]
-                    chart_data = counts.to_dict(orient="records")
+                    sql = f'SELECT "{x_axis}" as "{x_axis}", COUNT(*) as count FROM live_records GROUP BY "{x_axis}" ORDER BY count DESC LIMIT 15'
+                res_df = conn.execute(sql).fetchdf()
+                chart_data = res_df.to_dict(orient="records")
             except Exception as err:
-                print(f"Live aggregation error: {err}")
+                print(f"Live DuckDB aggregation error: {err}")
 
         computed_charts.append({
             "id": cand.get("id"),
@@ -206,36 +224,46 @@ async def poll_live_data_feed(source_id: str):
             "data": chart_data
         })
 
-    source["last_updated"] = pd.Timestamp.now().isoformat()
+    conn.close()
 
     return {
         "status": "live",
         "source_id": source_id,
-        "source_name": source["name"],
+        "source_name": source.name,
         "timestamp": pd.Timestamp.now().isoformat(),
         "live_metrics": raw_payload.get("live_metrics") if isinstance(raw_payload, dict) else {},
         "total_records": len(records),
         "visualizations": computed_charts
     }
 
+
 @router.post("/{source_id}/approve-candidates")
-async def approve_live_candidates(source_id: str, body: ApprovedLiveDashboardRequest):
+async def approve_live_candidates(
+    source_id: str,
+    body: ApprovedLiveDashboardRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Step 3: User confirms which AI proposed live charts to pin to the Live Dashboard.
     """
-    if source_id not in LIVE_DATA_SOURCES:
+    stmt = select(DataSourceModel).where(DataSourceModel.id == source_id)
+    result = await db.execute(stmt)
+    source = result.scalar_one_or_none()
+
+    if not source:
         raise HTTPException(status_code=404, detail="Live Data Source not found")
 
-    source = LIVE_DATA_SOURCES[source_id]
-    all_cands = source.get("candidates", [])
-    cand_map = {c["id"]: c for c in all_cands if "id" in c}
+    all_cands = source.candidates or []
+    cand_map = {c["id"]: c for c in all_cands if isinstance(c, dict) and "id" in c}
 
     approved = []
     for cid in body.selected_candidate_ids:
         if cid in cand_map:
             approved.append(cand_map[cid])
 
-    source["approved_candidates"] = approved
+    source.approved_candidates = approved
+    await db.commit()
+
     return {
         "status": "success",
         "source_id": source_id,

@@ -1,61 +1,61 @@
 import os
 import uuid
-import json
 import pandas as pd
-import duckdb
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
 from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 
 from app.analytics_engine.profiler import DataProfiler
 from app.analytics_engine.duckdb_engine import DuckDBEngine
 from app.ai.providers.factory import LLMProviderFactory
 from app.ai.prompts.strategy_prompt import SYSTEM_PROMPT, build_analysis_prompt
 from app.config import settings
+from app.db.models import DatasetModel
+from app.db.session import get_db
 
 router = APIRouter()
 
 STORAGE_DIR = os.path.join(settings.LOCAL_STORAGE_PATH, "datasets")
-META_FILE = os.path.join(settings.LOCAL_STORAGE_PATH, "datasets_meta.json")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-def _load_meta() -> Dict[str, Dict[str, Any]]:
-    if os.path.exists(META_FILE):
-        try:
-            with open(META_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
 
-def _save_meta(data: Dict[str, Dict[str, Any]]):
-    try:
-        with open(META_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Error saving metadata: {e}")
+class AnalyzeRequest(BaseModel):
+    supported_capabilities: Optional[List[Dict[str, Any]]] = None
 
-DATASETS_DB: Dict[str, Dict[str, Any]] = _load_meta()
+
+class GenerateChartsRequest(BaseModel):
+    selected_candidate_ids: Optional[List[str]] = None
+    custom_charts: Optional[List[Dict[str, Any]]] = None
+
 
 @router.post("/upload")
-async def upload_dataset(file: UploadFile = File(...)):
+async def upload_dataset(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Uploads a dataset file (CSV, XLSX, Parquet, JSON), saves it, profiles column structures via DuckDB,
-    and returns dataset metadata + preview rows.
+    Uploads a dataset file (CSV, XLSX, Parquet, JSON), saves it, profiles column structures,
+    and stores metadata in the persistent database.
     """
     filename = file.filename
     ext = os.path.splitext(filename)[1].lower()
 
     if ext not in [".csv", ".xlsx", ".xls", ".parquet", ".json"]:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Allowed: .csv, .xlsx, .xls, .parquet, .json")
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: .csv, .xlsx, .xls, .parquet, .json"
+        )
 
     dataset_id = str(uuid.uuid4())
-    file_path = os.path.join(STORAGE_DIR, f"{dataset_id}{ext}")
+    file_path = os.path.join(STORAGE_DIR, f"{dataset_id}{ext}").replace("\\", "/")
 
     content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # Read into pandas DataFrame for initial profiling
+    # Read into pandas DataFrame for initial profiling & type detection
     try:
         if ext == ".csv":
             df = pd.read_csv(file_path)
@@ -65,6 +65,8 @@ async def upload_dataset(file: UploadFile = File(...)):
             df = pd.read_parquet(file_path)
         elif ext == ".json":
             df = pd.read_json(file_path)
+        else:
+            df = pd.read_csv(file_path)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse data file: {str(e)}")
 
@@ -78,21 +80,23 @@ async def upload_dataset(file: UploadFile = File(...)):
         for row in preview_rows
     ]
 
-    dataset_record = {
-        "id": dataset_id,
-        "name": filename,
-        "size_bytes": len(content),
-        "file_path": file_path,
-        "total_rows": profile["total_rows"],
-        "total_columns": profile["total_columns"],
-        "profile": profile,
-        "preview_rows": cleaned_rows,
-        "ai_analysis": None,
-        "status": "ready"
-    }
-
-    DATASETS_DB[dataset_id] = dataset_record
-    _save_meta(DATASETS_DB)
+    record = DatasetModel(
+        id=dataset_id,
+        name=filename,
+        file_path=file_path,
+        size_bytes=len(content),
+        total_rows=profile["total_rows"],
+        total_columns=profile["total_columns"],
+        status="ready",
+        profile=profile,
+        preview_rows=cleaned_rows,
+        candidates=[],
+        candidate_logs=[],
+        ai_analysis=None,
+    )
+    db.add(record)
+    await db.commit()
+    await db.refresh(record)
 
     return {
         "id": dataset_id,
@@ -103,80 +107,90 @@ async def upload_dataset(file: UploadFile = File(...)):
         "preview_rows": cleaned_rows[:20]
     }
 
+
 @router.get("/")
-async def list_datasets():
-    """Lists uploaded datasets."""
+async def list_datasets(db: AsyncSession = Depends(get_db)):
+    """Lists uploaded datasets from the database."""
+    stmt = select(DatasetModel).order_by(desc(DatasetModel.created_at))
+    result = await db.execute(stmt)
+    datasets = result.scalars().all()
+
     items = []
-    for d_id, d in DATASETS_DB.items():
+    for d in datasets:
         items.append({
-            "id": d["id"],
-            "name": d["name"],
-            "size_bytes": d.get("size_bytes", 0),
-            "total_rows": d.get("total_rows", 0),
-            "total_columns": d.get("total_columns", 0),
-            "has_ai_analysis": d.get("ai_analysis") is not None
+            "id": d.id,
+            "name": d.name,
+            "size_bytes": d.size_bytes or 0,
+            "total_rows": d.total_rows or 0,
+            "total_columns": d.total_columns or 0,
+            "has_ai_analysis": d.ai_analysis is not None,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
         })
     return {"datasets": items}
 
+
 @router.get("/{dataset_id}")
-async def get_dataset(dataset_id: str, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
-    """Gets dataset details, paginated data grid rows, profile, and AI chart strategies."""
-    if dataset_id not in DATASETS_DB:
+async def get_dataset(
+    dataset_id: str,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Gets dataset details and fetches paginated data grid rows via DuckDB streaming.
+    """
+    stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
+    result = await db.execute(stmt)
+    dataset = result.scalar_one_or_none()
+
+    if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    d = DATASETS_DB[dataset_id]
-    file_path = d["file_path"]
-
+    file_path = dataset.file_path
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Dataset file lost on server")
 
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext == ".csv":
-        df = pd.read_csv(file_path)
-    else:
-        df = pd.read_excel(file_path)
-
-    paginated_df = df.iloc[offset:offset+limit]
-    rows = paginated_df.to_dict(orient="records")
-    cleaned_rows = [
-        {k: DataProfiler._clean_value(v) for k, v in row.items()}
-        for row in rows
-    ]
+    # DuckDB streaming pagination (no full pandas load)
+    try:
+        paginated_rows = DuckDBEngine.paginate_file(file_path, limit=limit, offset=offset)
+    except Exception as e:
+        # Fallback to stored preview if DuckDB query fails
+        preview = dataset.preview_rows or []
+        paginated_rows = preview[offset:offset+limit]
 
     return {
-        "id": d["id"],
-        "name": d["name"],
-        "total_rows": d["total_rows"],
-        "total_columns": d["total_columns"],
-        "profile": d["profile"],
-        "rows": cleaned_rows,
-        "ai_analysis": d.get("ai_analysis")
+        "id": dataset.id,
+        "name": dataset.name,
+        "total_rows": dataset.total_rows,
+        "total_columns": dataset.total_columns,
+        "profile": dataset.profile,
+        "rows": paginated_rows,
+        "ai_analysis": dataset.ai_analysis,
     }
 
-from pydantic import BaseModel
-
-class AnalyzeRequest(BaseModel):
-    supported_capabilities: Optional[List[Dict[str, Any]]] = None
-
-class GenerateChartsRequest(BaseModel):
-    selected_candidate_ids: Optional[List[str]] = None
-    custom_charts: Optional[List[Dict[str, Any]]] = None
 
 @router.post("/{dataset_id}/candidates")
-async def get_chart_candidates(dataset_id: str, body: Optional[AnalyzeRequest] = None):
+async def get_chart_candidates(
+    dataset_id: str,
+    body: Optional[AnalyzeRequest] = None,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Step 1: AI candidate discovery. Suggests 8-12 doable chart candidates for user selection.
     """
-    if dataset_id not in DATASETS_DB:
+    stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
+    result = await db.execute(stmt)
+    dataset = result.scalar_one_or_none()
+
+    if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    d = DATASETS_DB[dataset_id]
-    profile = d["profile"]
-    sample_rows = d["preview_rows"][:10]
+    profile = dataset.profile or {}
+    sample_rows = (dataset.preview_rows or [])[:10]
     capabilities = body.supported_capabilities if body else None
 
     provider = LLMProviderFactory.get_provider()
-    prompt = build_analysis_prompt(d["name"], profile, sample_rows, capabilities=capabilities)
+    prompt = build_analysis_prompt(dataset.name, profile, sample_rows, capabilities=capabilities)
 
     logs = [
         f"[{pd.Timestamp.now().isoformat()}] Step 1: Initializing LLM Candidate Discovery via OpenRouter.",
@@ -189,15 +203,15 @@ async def get_chart_candidates(dataset_id: str, body: Optional[AnalyzeRequest] =
         logs.append(f"[{pd.Timestamp.now().isoformat()}] LLM candidate discovery successful.")
     except Exception as e:
         logs.append(f"[{pd.Timestamp.now().isoformat()}] OpenRouter call error/timeout ({e}). Generating DuckDB candidate fallbacks.")
-        analysis_payload = _generate_duckdb_fallback_candidates(d["name"], profile, d["file_path"])
+        analysis_payload = _generate_duckdb_fallback_candidates(dataset.name, profile, dataset.file_path)
 
     candidates = analysis_payload.get("candidates", [])
     if not candidates and "strategies" in analysis_payload:
         candidates = analysis_payload["strategies"]
 
-    d["candidates"] = candidates
-    d["candidate_logs"] = logs
-    _save_meta(DATASETS_DB)
+    dataset.candidates = candidates
+    dataset.candidate_logs = logs
+    await db.commit()
 
     return {
         "status": "success",
@@ -208,17 +222,25 @@ async def get_chart_candidates(dataset_id: str, body: Optional[AnalyzeRequest] =
         "logs": logs
     }
 
+
 @router.post("/{dataset_id}/generate-selected")
-async def generate_selected_charts(dataset_id: str, body: GenerateChartsRequest):
+async def generate_selected_charts(
+    dataset_id: str,
+    body: GenerateChartsRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Step 2: User selection confirmation. Computes DuckDB aggregated data for selected candidate chart specifications.
     """
-    if dataset_id not in DATASETS_DB:
+    stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
+    result = await db.execute(stmt)
+    dataset = result.scalar_one_or_none()
+
+    if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    d = DATASETS_DB[dataset_id]
-    file_path = d["file_path"]
-    candidates = d.get("candidates", [])
+    file_path = dataset.file_path
+    candidates = dataset.candidates or []
 
     logs = [
         f"[{pd.Timestamp.now().isoformat()}] Step 2: Processing selected charts batch.",
@@ -226,7 +248,7 @@ async def generate_selected_charts(dataset_id: str, body: GenerateChartsRequest)
 
     selected_specs = []
     if body.selected_candidate_ids:
-        cand_map = {c["id"]: c for c in candidates if "id" in c}
+        cand_map = {c["id"]: c for c in candidates if isinstance(c, dict) and "id" in c}
         for cid in body.selected_candidate_ids:
             if cid in cand_map:
                 selected_specs.append(dict(cand_map[cid]))
@@ -259,17 +281,17 @@ async def generate_selected_charts(dataset_id: str, body: GenerateChartsRequest)
             spec["data"] = computed_data or []
             logs.append(f"[{pd.Timestamp.now().isoformat()}] DuckDB Query '{x_axis} vs {y_axis} ({agg})' completed in {elapsed_ms}ms ({len(spec['data'])} data points)")
 
-    ai_analysis = d.get("ai_analysis") or {}
+    ai_analysis = dataset.ai_analysis or {}
     dataset_summary = ai_analysis.get("dataset_summary") if isinstance(ai_analysis, dict) else None
     domain_context = ai_analysis.get("domain_context") if isinstance(ai_analysis, dict) else None
 
     payload = {
-        "dataset_summary": dataset_summary or f"Visual analytics for {d['name']}",
+        "dataset_summary": dataset_summary or f"Visual analytics for {dataset.name}",
         "domain_context": domain_context or "DataViz AI Engine",
         "strategies": selected_specs
     }
-    d["ai_analysis"] = payload
-    _save_meta(DATASETS_DB)
+    dataset.ai_analysis = payload
+    await db.commit()
 
     return {
         "status": "success",
@@ -278,21 +300,29 @@ async def generate_selected_charts(dataset_id: str, body: GenerateChartsRequest)
         "logs": logs
     }
 
+
 @router.post("/{dataset_id}/analyze")
-async def analyze_dataset(dataset_id: str, body: Optional[AnalyzeRequest] = None):
+async def analyze_dataset(
+    dataset_id: str,
+    body: Optional[AnalyzeRequest] = None,
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Legacy direct route: Generates visual strategy specifications and queries DuckDB directly.
+    Direct route: Generates visual strategy specifications and queries DuckDB directly.
     """
-    if dataset_id not in DATASETS_DB:
+    stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
+    result = await db.execute(stmt)
+    dataset = result.scalar_one_or_none()
+
+    if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    d = DATASETS_DB[dataset_id]
-    profile = d["profile"]
-    sample_rows = d["preview_rows"][:10]
+    profile = dataset.profile or {}
+    sample_rows = (dataset.preview_rows or [])[:10]
     capabilities = body.supported_capabilities if body else None
 
     provider = LLMProviderFactory.get_provider()
-    prompt = build_analysis_prompt(d["name"], profile, sample_rows, capabilities=capabilities)
+    prompt = build_analysis_prompt(dataset.name, profile, sample_rows, capabilities=capabilities)
 
     logs = [
         f"[{pd.Timestamp.now().isoformat()}] Executing Direct AI Analysis & DuckDB Query compilation.",
@@ -303,7 +333,7 @@ async def analyze_dataset(dataset_id: str, body: Optional[AnalyzeRequest] = None
         analysis_payload = await provider.analyze_json(prompt=prompt, system_prompt=SYSTEM_PROMPT)
     except Exception as e:
         logs.append(f"[{pd.Timestamp.now().isoformat()}] LLM exception: {e}. Utilizing DuckDB strategy fallbacks.")
-        analysis_payload = _generate_duckdb_fallback_strategies(d["name"], profile, d["file_path"])
+        analysis_payload = _generate_duckdb_fallback_strategies(dataset.name, profile, dataset.file_path)
 
     strategies = analysis_payload.get("candidates") or analysis_payload.get("strategies") or []
     for strat in strategies:
@@ -315,19 +345,19 @@ async def analyze_dataset(dataset_id: str, body: Optional[AnalyzeRequest] = None
 
         if strat.get("chart_type") == "kpi":
             if y_axis:
-                res = DuckDBEngine.query_file(d["file_path"], f'SELECT SUM("{y_axis}") as total, AVG("{y_axis}") as avg FROM dataset')
+                res = DuckDBEngine.query_file(dataset.file_path, f'SELECT SUM("{y_axis}") as total, AVG("{y_axis}") as avg FROM dataset')
                 if res:
                     cfg["primaryValue"] = round(float(res[0].get("total") or 0), 2)
                     cfg["subText"] = f"Average: {round(float(res[0].get('avg') or 0), 2)}"
                     strat["data"] = []
-        elif x_axis and d.get("file_path"):
-            computed_data = DuckDBEngine.generate_chart_data(d["file_path"], x_axis, y_axis, agg=agg)
+        elif x_axis and dataset.file_path:
+            computed_data = DuckDBEngine.generate_chart_data(dataset.file_path, x_axis, y_axis, agg=agg)
             if computed_data:
                 strat["data"] = computed_data
 
     analysis_payload["strategies"] = strategies
-    d["ai_analysis"] = analysis_payload
-    _save_meta(DATASETS_DB)
+    dataset.ai_analysis = analysis_payload
+    await db.commit()
 
     return {
         "status": "success",
@@ -336,11 +366,12 @@ async def analyze_dataset(dataset_id: str, body: Optional[AnalyzeRequest] = None
         "logs": logs
     }
 
+
 def _generate_duckdb_fallback_candidates(name: str, profile: Dict[str, Any], file_path: str) -> Dict[str, Any]:
     cols = profile.get("columns", [])
-    numeric_cols = [c for c in cols if c["inferred_type"] in ["integer", "float", "numeric"]]
-    cat_cols = [c for c in cols if c["inferred_type"] == "categorical"]
-    date_cols = [c for c in cols if c["inferred_type"] == "datetime"]
+    numeric_cols = [c for c in cols if c.get("inferred_type") in ["integer", "float", "numeric"]]
+    cat_cols = [c for c in cols if c.get("inferred_type") == "categorical"]
+    date_cols = [c for c in cols if c.get("inferred_type") == "datetime"]
 
     candidates = []
     
@@ -458,6 +489,7 @@ def _generate_duckdb_fallback_candidates(name: str, profile: Dict[str, Any], fil
         "domain_context": "DuckDB Vectorized Analytics Engine",
         "candidates": candidates
     }
+
 
 def _generate_duckdb_fallback_strategies(name: str, profile: Dict[str, Any], file_path: str) -> Dict[str, Any]:
     cands = _generate_duckdb_fallback_candidates(name, profile, file_path)
