@@ -31,6 +31,9 @@ def get_resolved_database_url() -> str:
     return raw_url
 
 
+import json
+from datetime import datetime
+
 DATABASE_URL = get_resolved_database_url()
 
 # Engine arguments
@@ -45,7 +48,7 @@ engine = create_async_engine(
     future=True,
 )
 
-AsyncSessionLocal = async_sessionmaker(
+_session_maker = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
@@ -54,14 +57,59 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+class _SessionProxy:
+    """Callable proxy ensuring references imported prior to init_db() dispatch to active engine."""
+    def __call__(self, **kwargs) -> AsyncSession:
+        return _session_maker(**kwargs)
+
+
+AsyncSessionLocal = _SessionProxy()
+
+
+async def _seed_legacy_meta():
+    """Migrates any existing datasets_meta.json entries into database if table is empty."""
+    from app.db.models import DatasetModel
+    from sqlalchemy import select
+    try:
+        meta_path = os.path.join(settings.LOCAL_STORAGE_PATH, "datasets_meta.json")
+        if not os.path.exists(meta_path):
+            return
+        async with _session_maker() as session:
+            res = await session.execute(select(DatasetModel).limit(1))
+            if res.scalar_one_or_none() is not None:
+                return  # Already populated
+            with open(meta_path, "r") as f:
+                data = json.load(f)
+            for d_id, d in data.items():
+                m = DatasetModel(
+                    id=d_id,
+                    name=d.get("name", "dataset.csv"),
+                    file_path=d.get("file_path", ""),
+                    size_bytes=d.get("size_bytes", 0),
+                    total_rows=d.get("total_rows", 0),
+                    total_columns=d.get("total_columns", 0),
+                    status=d.get("status", "ready"),
+                    profile=d.get("profile"),
+                    preview_rows=d.get("preview_rows"),
+                    ai_analysis=d.get("ai_analysis"),
+                    created_at=datetime.utcnow()
+                )
+                session.add(m)
+            await session.commit()
+            logger.info(f"[Database] Migrated {len(data)} datasets from legacy datasets_meta.json.")
+    except Exception as e:
+        logger.warning(f"[Database Seed Warning] {e}")
+
+
 async def init_db() -> None:
     """Initializes tables on startup."""
-    global engine, AsyncSessionLocal
+    global engine, _session_maker
     try:
         os.makedirs(settings.LOCAL_STORAGE_PATH, exist_ok=True)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info(f"[Database] Initialized tables successfully with URL: {DATABASE_URL.split('@')[-1]}")
+        await _seed_legacy_meta()
     except Exception as e:
         logger.error(f"[Database Init Error] {e}")
         # If PostgreSQL is not reachable locally, gracefully fall back to local SQLite
@@ -71,10 +119,11 @@ async def init_db() -> None:
             db_path = os.path.join(settings.LOCAL_STORAGE_PATH, "datavizai.db").replace("\\", "/")
             sqlite_url = f"sqlite+aiosqlite:///{db_path}"
             engine = create_async_engine(sqlite_url, echo=False, connect_args={"check_same_thread": False})
-            AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+            _session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             logger.info("[Database] Local SQLite fallback database ready.")
+            await _seed_legacy_meta()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
