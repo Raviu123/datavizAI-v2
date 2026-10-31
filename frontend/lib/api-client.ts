@@ -94,3 +94,20 @@ export const liveDataSourceApi = {
     return response.data;
   },
 };
+
+export const reportsApi = {
+  generateReport: async (datasetId: string) => {
+    const response = await apiClient.post(`/datasets/${datasetId}/reports/generate`);
+    return response.data;
+  },
+
+  listReports: async (datasetId: string) => {
+    const response = await apiClient.get(`/datasets/${datasetId}/reports`);
+    return response.data;
+  },
+
+  getReport: async (reportId: string) => {
+    const response = await apiClient.get(`/reports/${reportId}`);
+    return response.data;
+  },
+};

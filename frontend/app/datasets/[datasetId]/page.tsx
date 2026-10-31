@@ -8,7 +8,7 @@ import { ChartEngine, VisualStrategySpec } from '@/components/charts/ChartEngine
 import { ChartCandidatePickerModal, ChartCandidate } from '@/components/shared/ChartCandidatePickerModal';
 import { ExecutionLogViewer } from '@/components/shared/ExecutionLogViewer';
 import { DatasetChatSidebar } from '@/components/shared/DatasetChatSidebar';
-import { datasetApi } from '@/lib/api-client';
+import { datasetApi, reportsApi } from '@/lib/api-client';
 import {
   FileSpreadsheet,
   Table as TableIcon,
@@ -20,7 +20,10 @@ import {
   AlertCircle,
   Loader2,
   Terminal,
-  Filter
+  Filter,
+  FileText,
+  ArrowUpRight,
+  Clock,
 } from 'lucide-react';
 
 interface DatasetDetailPageProps {
@@ -32,11 +35,15 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
   const datasetId = resolvedParams.datasetId;
 
   const [dataset, setDataset] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'preview' | 'visualizations'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'visualizations' | 'reports'>('preview');
   const [isLoading, setIsLoading] = useState(true);
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
   const [isGeneratingSelected, setIsGeneratingSelected] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Multi-Agent Reports state
+  const [reports, setReports] = useState<any[]>([]);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
   // Chat Sidebar & Modal & Logging state
   const [isChatOpen, setIsChatOpen] = useState(true);
@@ -44,6 +51,45 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [isLogOpen, setIsLogOpen] = useState(false);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isPageLoading, setIsPageLoading] = useState(false);
+  const pageSize = 25;
+
+  const handlePageChange = async (newPage: number) => {
+    setCurrentPage(newPage);
+    setIsPageLoading(true);
+    try {
+      const offset = (newPage - 1) * pageSize;
+      const data = await datasetApi.getDatasetDetails(datasetId, pageSize, offset);
+      setDataset((prev: any) => ({
+        ...prev,
+        rows: data.rows,
+      }));
+    } catch (err: any) {
+      addLog(`Failed to stream page ${newPage}: ${err.message}`);
+    } finally {
+      setIsPageLoading(false);
+    }
+  };
+
+  const handleGenerateReport = async () => {
+    setIsGeneratingReport(true);
+    addLog('Triggering 5-Agent Autonomous Reporting Pipeline (Anomaly Scout -> Strategist -> DuckDB -> Chart Designer -> Synthesizer)...');
+    try {
+      const newReport = await reportsApi.generateReport(datasetId);
+      addLog(`Executive Report successfully generated: "${newReport.title}"`);
+      setReports((prev) => [newReport, ...prev]);
+      window.location.href = `/reports/${newReport.id}`;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Failed to generate report.';
+      setErrorMsg(msg);
+      addLog(`ERROR: ${msg}`);
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
 
   const addLog = (logMsg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -74,6 +120,9 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
   useEffect(() => {
     if (datasetId) {
       fetchDatasetDetails();
+      reportsApi.listReports(datasetId).then((res) => {
+        setReports(res.reports || []);
+      }).catch(() => {});
     }
   }, [datasetId]);
 
@@ -208,9 +257,27 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
             </button>
 
             <button
+              onClick={handleGenerateReport}
+              disabled={isGeneratingReport}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-purple-500/20 transition-all disabled:opacity-50 cursor-pointer"
+            >
+              {isGeneratingReport ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-purple-200" />
+                  <span>5 Agents Orchestrating...</span>
+                </>
+              ) : (
+                <>
+                  <FileText className="w-4 h-4 text-purple-200" />
+                  <span>Autonomous Executive Report</span>
+                </>
+              )}
+            </button>
+
+            <button
               onClick={handleOpenCandidatePicker}
               disabled={isAiAnalyzing}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/20 transition-all disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all disabled:opacity-50"
             >
               {isAiAnalyzing ? (
                 <>
@@ -255,6 +322,17 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
                 <BarChart2 className="w-4 h-4" />
                 Visualizations ({strategies.length})
               </button>
+              <button
+                onClick={() => setActiveTab('reports')}
+                className={`pb-3 text-xs font-medium flex items-center gap-2 border-b-2 transition-colors ${
+                  activeTab === 'reports'
+                    ? 'border-indigo-500 text-indigo-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                Executive Reports ({reports.length})
+              </button>
             </div>
 
             {/* Tab Content */}
@@ -266,7 +344,106 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
                   totalRows={dataset.total_rows}
                   isAiAnalyzing={isAiAnalyzing}
                   onRunAiAnalysis={handleOpenCandidatePicker}
+                  currentPage={currentPage}
+                  pageSize={pageSize}
+                  onPageChange={handlePageChange}
+                  isLoading={isPageLoading}
                 />
+              </div>
+            ) : activeTab === 'reports' ? (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between bg-gradient-to-r from-purple-950/30 to-indigo-950/30 border border-purple-500/30 rounded-xl p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-lg bg-purple-500/20 text-purple-300">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-bold text-purple-200 uppercase tracking-wide">
+                        Autonomous 5-Agent Intelligence Reports
+                      </h3>
+                      <p className="text-xs text-slate-300">
+                        Multi-agent generated executive briefings with verified DuckDB SQL calculations and PDF export.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleGenerateReport}
+                    disabled={isGeneratingReport}
+                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-purple-600/20 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isGeneratingReport ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Orchestrating Agents...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Generate New Dossier</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {reports.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {reports.map((rep) => (
+                      <div
+                        key={rep.id}
+                        className="bg-slate-900/60 border border-slate-800/80 hover:border-purple-500/50 rounded-xl p-5 space-y-3 transition-all shadow-lg flex flex-col justify-between"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                              Executive Dossier
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-slate-500" />
+                              {rep.created_at ? new Date(rep.created_at).toLocaleDateString() : 'Ready'}
+                            </span>
+                          </div>
+
+                          <h4 className="text-sm font-bold text-slate-100 line-clamp-2">
+                            {rep.title}
+                          </h4>
+
+                          <p className="text-xs text-slate-400 line-clamp-3">
+                            {rep.executive_summary}
+                          </p>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-500 font-mono">
+                            {rep.sections?.length || 0} investigations • {rep.kpis?.length || 0} KPIs
+                          </span>
+                          <Link
+                            href={`/reports/${rep.id}`}
+                            className="text-xs font-semibold text-purple-400 hover:text-purple-300 flex items-center gap-1 group transition-colors"
+                          >
+                            <span>Open Dossier</span>
+                            <ArrowUpRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-16 text-center text-slate-500 bg-slate-900/40 border border-slate-800 rounded-xl space-y-3">
+                    <FileText className="w-10 h-10 text-slate-600 mx-auto" />
+                    <h4 className="text-sm font-semibold text-slate-300">No Executive Reports Generated Yet</h4>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                      Click the button above to launch the 5-Agent pipeline and synthesize an executive intelligence briefing with PDF export.
+                    </p>
+                    <button
+                      onClick={handleGenerateReport}
+                      disabled={isGeneratingReport}
+                      className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-semibold rounded-lg hover:from-purple-500 hover:to-indigo-500 transition-all shadow-lg shadow-purple-500/20 cursor-pointer"
+                    >
+                      {isGeneratingReport ? 'Orchestrating Agents...' : 'Generate First Dossier'}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-6">
