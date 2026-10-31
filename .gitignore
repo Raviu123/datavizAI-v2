@@ -18,6 +18,7 @@ node_modules/
 # Build
 dist/
 build/
+.next/
 
 # IDE
 .vscode/
@@ -26,3 +27,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Database & SQLite files
+*.db
+*.sqlite
+*.sqlite3
+backend/storage/*.db
