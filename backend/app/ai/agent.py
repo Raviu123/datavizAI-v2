@@ -44,7 +44,7 @@ Sample Preview Records:
 
 Conversation History:
 {history_context}
-
+{attached_chart_context}
 User Question: "{user_message}"
 
 Previous Agent Steps & Observations in this turn:
@@ -74,7 +74,8 @@ class DataAnalystAgent:
         dataset_record: Dict[str, Any],
         user_message: str,
         history: Optional[List[Dict[str, Any]]] = None,
-        max_cycles: int = 4
+        max_cycles: int = 4,
+        attached_chart: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         d_name = dataset_record.get("name", "dataset")
         profile = dataset_record.get("profile", {})
@@ -103,17 +104,50 @@ class DataAnalystAgent:
                 turns.append(f"{role}: {msg}")
             history_text = "\n".join(turns)
 
+        # Build attached chart context if provided
+        attached_chart_context = ""
+        chart_tag = ""
+        if attached_chart:
+            c_title = attached_chart.get("title", "Attached Visualization")
+            c_type = attached_chart.get("chart_type", "chart")
+            c_desc = attached_chart.get("description", "")
+            cfg = attached_chart.get("config") or {}
+            c_x = attached_chart.get("xAxisKey") or cfg.get("xAxisKey") or "Dimension"
+            c_y = attached_chart.get("yAxisKeys") or cfg.get("yAxisKeys") or ["Metric"]
+            c_data = attached_chart.get("data", [])
+            data_sample = c_data[:30] if isinstance(c_data, list) else []
+            chart_tag = f" with attached chart '{c_title}' ({c_type})"
+
+            attached_chart_context = f"""
+======================================================================
+USER ATTACHED CHART CONTEXT:
+The user has attached a specific visualization from their dashboard and asked a question about it:
+- Chart Title: "{c_title}"
+- Chart Type: {str(c_type).upper()}
+- Dimension (X-Axis): {c_x}
+- Metric(s) (Y-Axis): {c_y}
+{f'- Description: {c_desc}' if c_desc else ''}
+- Underlying Aggregated Data Points ({len(c_data)} rows):
+{json.dumps(data_sample, indent=2)}
+
+Special Guidelines for Attached Visualization:
+1. Ground your answer directly in the exact categories, rankings, and numbers shown in this chart.
+2. If the user asks 'why' or asks for root-causes (e.g. why one cohort is highest/lowest, what drives this trend), use the execute_sql tool to investigate other columns, correlations, or demographics in the dataset.
+3. Reference the exact numbers and categories from the chart in your final explanation.
+======================================================================
+"""
+
         turn_history = []
         executed_sqls = []
         last_query_data = None
         final_answer = None
         visualization = None
 
-        logger.info(f"[Agentic Analyst ReAct] Starting loop on '{d_name}' for question: \"{user_message}\"")
+        logger.info(f"[Agentic Analyst ReAct] Starting loop on '{d_name}' for question: \"{user_message}\"{chart_tag}")
 
         yield {
             "type": "thought",
-            "thought": f"Analyzing question \"{user_message}\" in context of dataset '{d_name}' ({len(cols)} columns, {profile.get('total_rows', 0):,} rows)..."
+            "thought": f"Analyzing question \"{user_message}\"{chart_tag} in context of dataset '{d_name}' ({len(cols)} columns, {profile.get('total_rows', 0):,} rows)..."
         }
 
         for cycle in range(1, max_cycles + 1):
@@ -124,6 +158,7 @@ class DataAnalystAgent:
                 columns_meta=json.dumps(clean_cols, indent=2),
                 sample_rows=json.dumps(sample_rows[:3], indent=2),
                 history_context=history_text,
+                attached_chart_context=attached_chart_context,
                 user_message=user_message,
                 turn_history=json.dumps(turn_history, indent=2) if turn_history else "No prior actions yet.",
                 cycle_num=cycle,
@@ -298,14 +333,15 @@ class DataAnalystAgent:
         self,
         dataset_record: Dict[str, Any],
         user_message: str,
-        history: Optional[List[Dict[str, Any]]] = None
+        history: Optional[List[Dict[str, Any]]] = None,
+        attached_chart: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Backwards-compatible non-streaming runner."""
         last_event = None
         thoughts = []
         tool_calls = []
 
-        async for event in self.process_query_stream(dataset_record, user_message, history):
+        async for event in self.process_query_stream(dataset_record, user_message, history, attached_chart=attached_chart):
             if event.get("type") == "thought" and event.get("thought"):
                 thoughts.append(event["thought"])
             elif event.get("type") == "tool_call":

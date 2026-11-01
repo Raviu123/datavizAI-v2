@@ -61,11 +61,12 @@ export const datasetApi = {
     return response.data;
   },
 
-  chatWithData: async (datasetId: string, message: string, conversationId?: string) => {
+  chatWithData: async (datasetId: string, message: string, conversationId?: string, attachedChart?: any) => {
     const response = await apiClient.post('/chat', {
       dataset_id: datasetId,
       message,
       conversation_id: conversationId,
+      attached_chart: attachedChart,
     });
     return response.data;
   },
@@ -75,7 +76,8 @@ export const datasetApi = {
     message: string,
     conversationId: string | undefined,
     onEvent: (event: any) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    attachedChart?: any
   ) => {
     const url = `${API_BASE_URL}/chat/stream`;
     const response = await fetch(url, {
@@ -88,6 +90,7 @@ export const datasetApi = {
         dataset_id: datasetId,
         message,
         conversation_id: conversationId,
+        attached_chart: attachedChart,
       }),
       signal,
     });

@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
     dataset_id: str
     message: str
     conversation_id: Optional[str] = None
+    attached_chart: Optional[Dict[str, Any]] = None
 
 
 class ChatResponse(BaseModel):
@@ -88,7 +89,8 @@ async def chat_with_data_stream(request: ChatRequest):
             async for event in agent.process_query_stream(
                 dataset_record=dataset_dict,
                 user_message=request.message,
-                history=history_payload
+                history=history_payload,
+                attached_chart=request.attached_chart
             ):
                 event_type = event.get("type")
                 if event_type == "final_answer":
@@ -182,7 +184,8 @@ async def chat_with_data(
     agent_res = await agent.process_query(
         dataset.to_dict(),
         request.message,
-        history=history_payload
+        history=history_payload,
+        attached_chart=request.attached_chart
     )
 
     ai_message = agent_res.get("message", "")

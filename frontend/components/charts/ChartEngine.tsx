@@ -12,7 +12,7 @@ import { FunnelComponent } from './FunnelComponent';
 import { GaugeComponent } from './GaugeComponent';
 import { BubbleChartComponent } from './BubbleChartComponent';
 import { CHART_REGISTRY } from './registry';
-import { BarChart2, LineChart, PieChart, ScatterChart as ScatterIcon, Activity, Layers, Settings2, Grid, Filter, Gauge as GaugeIcon } from 'lucide-react';
+import { BarChart2, LineChart, PieChart, ScatterChart as ScatterIcon, Activity, Layers, Settings2, Grid, Filter, Gauge as GaugeIcon, Sparkles } from 'lucide-react';
 
 export interface VisualStrategySpec {
   id: string;
@@ -27,11 +27,12 @@ export interface VisualStrategySpec {
 interface ChartEngineProps {
   strategy: VisualStrategySpec;
   onConfigChange?: (updatedStrategy: VisualStrategySpec) => void;
+  onAttachToChat?: (strategy: VisualStrategySpec) => void;
 }
 
 const SUPPORTED_CHARTS = ['bar', 'line', 'area', 'pie', 'donut', 'scatter', 'radar', 'composed', 'treemap', 'funnel', 'gauge', 'bubble', 'kpi'];
 
-export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChange }) => {
+export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChange, onAttachToChat }) => {
   const initialType = (strategy.chart_type || 'bar').toLowerCase();
   const [currentChartType, setCurrentChartType] = useState<string>(
     SUPPORTED_CHARTS.includes(initialType) ? initialType : 'bar'
@@ -158,7 +159,25 @@ export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChan
         </div>
 
         {/* Dynamic Controls Header */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {onAttachToChat && (
+            <button
+              onClick={() =>
+                onAttachToChat({
+                  ...strategy,
+                  chart_type: currentChartType,
+                  config: activeConfig,
+                  data: normalizedData,
+                })
+              }
+              title="Attach this chart and ask AI questions about it"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 hover:text-white border border-indigo-500/30 text-[11px] font-medium transition-all shadow-sm cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Ask AI</span>
+            </button>
+          )}
+
           <select
             value={currentChartType}
             onChange={(e) => setCurrentChartType(e.target.value)}

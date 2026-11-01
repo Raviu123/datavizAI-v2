@@ -49,10 +49,16 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
 
   // Chat Sidebar & Modal & Logging state
   const [isChatOpen, setIsChatOpen] = useState(true);
+  const [attachedChartForChat, setAttachedChartForChat] = useState<any | null>(null);
   const [candidates, setCandidates] = useState<ChartCandidate[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [isLogOpen, setIsLogOpen] = useState(false);
+
+  const handleAttachChartToChat = (strat: any) => {
+    setAttachedChartForChat(strat);
+    setIsChatOpen(true);
+  };
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -448,7 +454,11 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
                 {strategies.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {strategies.map((strat) => (
-                      <ChartEngine key={strat.id} strategy={strat} />
+                      <ChartEngine
+                        key={strat.id}
+                        strategy={strat}
+                        onAttachToChat={handleAttachChartToChat}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -472,6 +482,8 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
             datasetName={dataset.name}
             isOpen={isChatOpen}
             onToggle={() => setIsChatOpen(false)}
+            attachedChart={attachedChartForChat}
+            onClearAttachedChart={() => setAttachedChartForChat(null)}
           />
         </div>
 

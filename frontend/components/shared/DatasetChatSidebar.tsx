@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ChartEngine } from '@/components/charts/ChartEngine';
 import { datasetApi } from '@/lib/api-client';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
@@ -14,7 +14,9 @@ import {
   User,
   Loader2,
   GripVertical,
-  PanelRightClose
+  PanelRightClose,
+  BarChart2,
+  X
 } from 'lucide-react';
 
 interface DatasetChatSidebarProps {
@@ -24,6 +26,8 @@ interface DatasetChatSidebarProps {
   onToggle: () => void;
   width?: number;
   onWidthChange?: (newWidth: number) => void;
+  attachedChart?: any;
+  onClearAttachedChart?: () => void;
 }
 
 interface Message {
@@ -35,6 +39,10 @@ interface Message {
   timestamp: string;
   thinkingSteps?: ThinkingStep[];
   isStreaming?: boolean;
+  attachedChartInfo?: {
+    title: string;
+    chart_type: string;
+  };
 }
 
 export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
@@ -44,12 +52,28 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
   onToggle,
   width = 380,
   onWidthChange,
+  attachedChart,
+  onClearAttachedChart,
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [sidebarWidth, setSidebarWidth] = useState<number>(width);
+  const [activeAttachedChart, setActiveAttachedChart] = useState<any>(attachedChart || null);
+
+  useEffect(() => {
+    if (attachedChart) {
+      setActiveAttachedChart(attachedChart);
+    }
+  }, [attachedChart]);
+
+  const handleClearAttachment = () => {
+    setActiveAttachedChart(null);
+    if (onClearAttachedChart) {
+      onClearAttachedChart();
+    }
+  };
 
   const isResizing = useRef(false);
 
@@ -85,11 +109,25 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
     e.preventDefault();
     if (!input.trim() || isTyping) return;
 
+    const chartToSend = activeAttachedChart ? {
+      id: activeAttachedChart.id,
+      title: activeAttachedChart.title,
+      chart_type: activeAttachedChart.chart_type,
+      description: activeAttachedChart.description,
+      xAxisKey: activeAttachedChart.config?.xAxisKey,
+      yAxisKeys: activeAttachedChart.config?.yAxisKeys,
+      data: activeAttachedChart.data || [],
+    } : undefined;
+
     const userMsg: Message = {
       id: Date.now().toString(),
       sender: 'user',
       text: input,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      attachedChartInfo: activeAttachedChart ? {
+        title: activeAttachedChart.title,
+        chart_type: activeAttachedChart.chart_type,
+      } : undefined,
     };
 
     const aiMsgId = (Date.now() + 1).toString();
@@ -106,6 +144,7 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
     const promptText = input;
     setInput('');
     setIsTyping(true);
+    handleClearAttachment();
 
     try {
       await datasetApi.streamChatWithData(
@@ -218,7 +257,9 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
               )
             );
           }
-        }
+        },
+        undefined,
+        chartToSend
       );
     } catch (err: any) {
       setMessages((prev) =>
@@ -313,6 +354,13 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
                     : 'bg-slate-950 border border-slate-800 text-slate-200 rounded-tl-none'
                 }`}
               >
+                {msg.sender === 'user' && msg.attachedChartInfo && (
+                  <div className="flex items-center gap-1.5 text-[10px] bg-indigo-700/80 text-indigo-100 px-2 py-0.5 rounded-md mb-1 w-fit font-mono shadow-sm">
+                    <BarChart2 className="w-3 h-3 text-indigo-200 shrink-0" />
+                    <span>Attached: {msg.attachedChartInfo.title}</span>
+                  </div>
+                )}
+
                 {msg.sender === 'ai' && msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
                   <ThinkingProcessDisclosure
                     steps={msg.thinkingSteps}
@@ -356,6 +404,60 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
           ))
         )}
       </div>
+
+      {/* Attached Chart Context Pill & Quick Suggestions */}
+      {activeAttachedChart && (
+        <div className="px-3 pt-2.5 pb-1.5 bg-slate-950 border-t border-slate-800 space-y-2 shrink-0">
+          <div className="flex items-center justify-between bg-indigo-950/70 border border-indigo-500/40 rounded-lg px-2.5 py-1.5 text-xs text-indigo-200 shadow-sm animate-in fade-in">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="p-1 rounded bg-indigo-500/20 text-indigo-300 shrink-0">
+                <BarChart2 className="w-3.5 h-3.5" />
+              </div>
+              <div className="truncate">
+                <span className="font-semibold text-slate-100 truncate block text-[11px]">
+                  {activeAttachedChart.title}
+                </span>
+                <span className="text-[10px] text-indigo-300/80 font-mono">
+                  {activeAttachedChart.chart_type?.toUpperCase()} • {activeAttachedChart.data?.length || 0} data points
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearAttachment}
+              title="Remove attached chart"
+              className="p-1 text-slate-400 hover:text-white rounded hover:bg-indigo-900/50 transition-colors shrink-0 ml-2 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Quick Query Suggestions */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[10px] no-scrollbar">
+            <button
+              type="button"
+              onClick={() => setInput("Explain the key takeaways and performance trends shown in this chart.")}
+              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-indigo-300 whitespace-nowrap transition-colors cursor-pointer"
+            >
+              💡 Explain takeaways
+            </button>
+            <button
+              type="button"
+              onClick={() => setInput("Why is the top-performing category leading by so much compared to the others?")}
+              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-indigo-300 whitespace-nowrap transition-colors cursor-pointer"
+            >
+              🔍 Why is top leading?
+            </button>
+            <button
+              type="button"
+              onClick={() => setInput("What anomalies, risks, or unusual distributions exist in this chart?")}
+              className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-indigo-300 whitespace-nowrap transition-colors cursor-pointer"
+            >
+              ⚠️ Identify risks
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Input Form Fixed at Bottom */}
       <form onSubmit={handleSend} className="p-3 bg-slate-950 border-t border-slate-800 flex items-center gap-2 shrink-0">
