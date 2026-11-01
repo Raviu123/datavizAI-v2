@@ -93,28 +93,35 @@ export default function AIChatPage() {
         currentPrompt,
         conversationId,
         (event: any) => {
-          if (event.event === 'start' && event.conversation_id) {
+          const evtType = event.type || event.event;
+
+          if ((evtType === 'init' || evtType === 'start') && event.conversation_id) {
             setConversationId(event.conversation_id);
-          } else if (event.event === 'thought') {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === aiMsgId
-                  ? {
-                      ...msg,
-                      thinkingSteps: [
-                        ...(msg.thinkingSteps || []),
-                        {
-                          id: `${Date.now()}-${Math.random()}`,
-                          type: 'thought',
-                          step: event.step,
-                          content: event.content,
-                        },
-                      ],
-                    }
-                  : msg
-              )
-            );
-          } else if (event.event === 'tool_call') {
+          } else if (evtType === 'thought') {
+            const thoughtText = event.thought || event.content || '';
+            if (thoughtText) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        thinkingSteps: [
+                          ...(msg.thinkingSteps || []),
+                          {
+                            id: `${Date.now()}-${Math.random()}`,
+                            type: 'thought',
+                            step: event.cycle ?? event.step,
+                            content: thoughtText,
+                          },
+                        ],
+                      }
+                    : msg
+                )
+              );
+            }
+          } else if (evtType === 'tool_call') {
+            const tool = event.action || event.tool || 'execute_sql';
+            const query = event.sql || event.query || (event.params ? JSON.stringify(event.params) : '');
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === aiMsgId
@@ -125,16 +132,21 @@ export default function AIChatPage() {
                         {
                           id: `${Date.now()}-${Math.random()}`,
                           type: 'tool_call',
-                          step: event.step,
-                          tool: event.tool,
-                          query: event.query,
+                          step: event.cycle ?? event.step,
+                          tool,
+                          query,
                         },
                       ],
                     }
                   : msg
               )
             );
-          } else if (event.event === 'tool_result') {
+          } else if (evtType === 'tool_result') {
+            const tool = event.action || event.tool || 'execute_sql';
+            const obs = event.observation || event.result;
+            const sample = event.data || event.sample_values || (typeof obs === 'object' ? obs.sample : obs);
+            const rowCount = event.row_count ?? (typeof obs === 'object' ? obs.row_count : (Array.isArray(sample) ? sample.length : undefined));
+
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === aiMsgId
@@ -145,11 +157,12 @@ export default function AIChatPage() {
                         {
                           id: `${Date.now()}-${Math.random()}`,
                           type: 'tool_result',
-                          step: event.step,
-                          tool: event.tool,
+                          step: event.cycle ?? event.step,
+                          tool,
                           result: {
-                            row_count: event.row_count,
-                            sample: event.sample,
+                            row_count: rowCount,
+                            sample,
+                            observation: typeof obs === 'string' ? obs : undefined,
                           },
                         },
                       ],
@@ -157,13 +170,14 @@ export default function AIChatPage() {
                   : msg
               )
             );
-          } else if (event.event === 'final_answer') {
+          } else if (evtType === 'final_answer') {
+            const finalAnswer = event.message || event.answer || '';
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === aiMsgId
                   ? {
                       ...msg,
-                      text: event.message || "Analysis complete.",
+                      text: finalAnswer || "Analysis complete.",
                       sql: event.sql,
                       visualization: event.visualization,
                       isStreaming: false,
@@ -171,13 +185,13 @@ export default function AIChatPage() {
                   : msg
               )
             );
-          } else if (event.event === 'error') {
+          } else if (evtType === 'error') {
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === aiMsgId
                   ? {
                       ...msg,
-                      text: event.error || "Failed to process chat query with data.",
+                      text: event.error || event.message || "Failed to process chat query with data.",
                       isStreaming: false,
                     }
                   : msg

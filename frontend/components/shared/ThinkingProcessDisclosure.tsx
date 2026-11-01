@@ -22,8 +22,9 @@ export const ThinkingProcessDisclosure: React.FC<ThinkingProcessDisclosureProps>
   steps,
   isStreaming = false,
 }) => {
-  // If streaming, stay open so user sees real-time reasoning. When finished, default closed.
-  const [isOpen, setIsOpen] = useState<boolean>(isStreaming);
+  // If streaming, stay open so user sees real-time reasoning. When finished, default closed unless user explicitly toggled.
+  const [userToggled, setUserToggled] = useState<boolean | null>(null);
+  const isOpen = userToggled !== null ? userToggled : isStreaming;
 
   if (!steps || steps.length === 0) return null;
 
@@ -31,7 +32,7 @@ export const ThinkingProcessDisclosure: React.FC<ThinkingProcessDisclosureProps>
     <div className="w-full my-2 font-sans text-xs">
       {/* Header Pill Button */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => setUserToggled(!isOpen)}
         className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800/90 border border-slate-800 text-slate-300 transition-colors w-full text-left group"
       >
         <div className="flex items-center gap-1.5 shrink-0">
@@ -89,17 +90,20 @@ export const ThinkingProcessDisclosure: React.FC<ThinkingProcessDisclosureProps>
             }
 
             if (st.type === 'tool_result') {
+              const obsText = typeof st.result === 'string'
+                ? st.result
+                : st.result?.observation || (st.result?.sample ? JSON.stringify(st.result.sample, null, 2) : '');
+              const rowCount = typeof st.result === 'object' ? st.result?.row_count : undefined;
+
               return (
                 <div key={st.id || idx} className="bg-slate-900/60 p-2 rounded-lg border border-slate-800/60 space-y-1 text-slate-400">
                   <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-[10px]">
                     <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                    <span>Observation: {st.result?.row_count ?? 0} rows returned</span>
+                    <span>Observation{rowCount !== undefined ? `: ${rowCount} rows returned` : ''}</span>
                   </div>
-                  {st.result?.sample && (
-                    <pre className="text-[10px] text-slate-300 bg-slate-950 p-1.5 rounded overflow-x-auto max-h-32">
-                      {typeof st.result.sample === 'string'
-                        ? st.result.sample
-                        : JSON.stringify(st.result.sample, null, 2)}
+                  {obsText && (
+                    <pre className="text-[10px] text-slate-300 bg-slate-950 p-1.5 rounded overflow-x-auto max-h-32 whitespace-pre-wrap">
+                      {obsText}
                     </pre>
                   )}
                 </div>

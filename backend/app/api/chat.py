@@ -83,7 +83,7 @@ async def chat_with_data_stream(request: ChatRequest):
 
         try:
             # Yield initial connecting event
-            yield f"data: {json.dumps({'type': 'init', 'conversation_id': conv_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'init', 'event': 'init', 'conversation_id': conv_id})}\n\n"
 
             async for event in agent.process_query_stream(
                 dataset_record=dataset_dict,
@@ -113,6 +113,7 @@ async def chat_with_data_stream(request: ChatRequest):
 
                     payload = {
                         "type": "final_answer",
+                        "event": "final_answer",
                         "conversation_id": conv_id,
                         "message": final_msg,
                         "sql": final_sql,
@@ -121,7 +122,9 @@ async def chat_with_data_stream(request: ChatRequest):
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
                 else:
-                    yield f"data: {json.dumps(event)}\n\n"
+                    event_copy = dict(event)
+                    event_copy["event"] = event_type
+                    yield f"data: {json.dumps(event_copy)}\n\n"
 
         except Exception as e:
             logger.error(f"[Chat Stream Error] {e}", exc_info=True)

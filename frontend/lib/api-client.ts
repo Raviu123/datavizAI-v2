@@ -124,6 +124,16 @@ export const datasetApi = {
         }
       }
     }
+
+    // Flush any remaining buffer on stream termination
+    if (buffer.trim().startsWith('data: ')) {
+      try {
+        const data = JSON.parse(buffer.trim().slice(6));
+        onEvent(data);
+      } catch (e) {
+        console.warn('[Chat SSE JSON parse error on flush]', buffer, e);
+      }
+    }
   },
 };
 
