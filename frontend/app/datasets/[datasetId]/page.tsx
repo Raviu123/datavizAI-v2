@@ -232,55 +232,30 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsChatOpen(!isChatOpen)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
-                isChatOpen
-                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-500/20'
-                  : 'bg-slate-900 text-slate-300 border-slate-800 hover:text-white'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{isChatOpen ? 'Hide Chat Assistant' : 'Chat with Data'}</span>
-            </button>
-
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setIsLogOpen(!isLogOpen)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                 isLogOpen
                   ? 'bg-slate-800 text-indigo-400 border-indigo-500'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700'
               }`}
+              title="Toggle execution logs"
             >
               <Terminal className="w-3.5 h-3.5" />
               <span>Logs ({logs.length})</span>
             </button>
 
             <button
-              onClick={handleOpenStreamingReport}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-gradient-to-r from-purple-600 via-indigo-600 to-indigo-700 hover:from-purple-500 hover:to-indigo-600 text-white text-xs font-semibold shadow-lg shadow-purple-500/20 transition-all cursor-pointer"
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                isChatOpen
+                  ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/50 hover:bg-indigo-600/30'
+                  : 'bg-indigo-600 text-white border-indigo-500 hover:bg-indigo-500 shadow-md shadow-indigo-600/20'
+              }`}
             >
-              <Sparkles className="w-4 h-4 text-purple-200" />
-              <span>Autonomous Executive Report</span>
-            </button>
-
-            <button
-              onClick={handleOpenCandidatePicker}
-              disabled={isAiAnalyzing}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all disabled:opacity-50"
-            >
-              {isAiAnalyzing ? (
-                <>
-                  <Loader2 className="w-4 h-4 text-cyan-200 animate-spin" />
-                  <span>Discovering AI Charts...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-cyan-200" />
-                  <span>AI Chart Recommendations</span>
-                </>
-              )}
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{isChatOpen ? 'Chat Assistant Open' : 'Open AI Chat'}</span>
             </button>
           </div>
         </div>
@@ -427,14 +402,14 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
               </div>
             ) : (
               <div className="space-y-6">
-                <div className="flex items-center justify-between bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-4">
                   <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300">
+                    <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300 shrink-0">
                       <Zap className="w-5 h-5" />
                     </div>
                     <div>
                       <h3 className="text-xs font-semibold text-indigo-200 uppercase tracking-wide">
-                        OpenRouter AI & DuckDB Engine: {dataset.ai_analysis?.domain_context || 'NVIDIA Nemotron 3 Ultra 550B'}
+                        OpenRouter AI & DuckDB Engine: {dataset.ai_analysis?.domain_context || 'Universal Domain Intelligence'}
                       </h3>
                       <p className="text-xs text-slate-300">
                         {dataset.ai_analysis?.dataset_summary || 'Visual analytics generated dynamically based on frontend chart registry capabilities.'}
@@ -444,7 +419,7 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
 
                   <button
                     onClick={handleOpenCandidatePicker}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 text-xs font-medium transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 text-xs font-medium transition-colors shrink-0 w-fit"
                   >
                     <Filter className="w-3.5 h-3.5" />
                     <span>Customize / Add More Charts</span>
@@ -452,7 +427,7 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
                 </div>
 
                 {strategies.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className={`grid gap-6 ${isChatOpen ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'}`}>
                     {strategies.map((strat) => (
                       <ChartEngine
                         key={strat.id}

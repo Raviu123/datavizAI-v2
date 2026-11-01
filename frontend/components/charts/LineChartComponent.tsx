@@ -20,7 +20,7 @@ export const LineChartComponent: React.FC<LineChartProps> = ({ data, config }) =
   return (
     <div className="w-full h-72">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 10, right: 20, left: 10, bottom: 20 }}>
+        <LineChart data={data} margin={{ top: 10, right: 15, left: -5, bottom: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
           <XAxis dataKey={xAxisKey} stroke="#94a3b8" fontSize={11} tickLine={false} />
           <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />

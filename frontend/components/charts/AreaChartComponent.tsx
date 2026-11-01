@@ -21,7 +21,7 @@ export const AreaChartComponent: React.FC<AreaChartProps> = ({ data, config }) =
   return (
     <div className="w-full h-72">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 10, right: 20, left: 10, bottom: 20 }}>
+        <AreaChart data={data} margin={{ top: 10, right: 15, left: -5, bottom: 20 }}>
           <defs>
             {colors.map((col, idx) => (
               <linearGradient key={idx} id={`colorGrad_${idx}`} x1="0" y1="0" x2="0" y2="1">

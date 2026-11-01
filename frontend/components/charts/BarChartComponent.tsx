@@ -30,7 +30,7 @@ export const BarChartComponent: React.FC<BarChartProps> = ({ data, config }) => 
   return (
     <div className="w-full h-72">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 10, right: 20, left: 10, bottom: 25 }}>
+        <BarChart data={data} margin={{ top: 10, right: 15, left: -5, bottom: 25 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} opacity={0.6} />
           <XAxis
             dataKey={xAxisKey}

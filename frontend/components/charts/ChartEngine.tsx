@@ -145,13 +145,13 @@ export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChan
   }
 
   return (
-    <div className="flex flex-col bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl hover:border-slate-700 transition-all relative group">
+    <div className="flex flex-col bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl hover:border-slate-700 transition-all relative group min-w-0 overflow-hidden">
       {/* Chart Header */}
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5 mb-3">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             {getCategoryIcon()}
-            <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
+            <h3 className="text-sm font-semibold text-slate-100 truncate">{title}</h3>
           </div>
           {description && (
             <p className="text-xs text-slate-400 mt-1 line-clamp-2">{description}</p>
@@ -159,7 +159,7 @@ export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChan
         </div>
 
         {/* Dynamic Controls Header */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
           {onAttachToChat && (
             <button
               onClick={() =>
