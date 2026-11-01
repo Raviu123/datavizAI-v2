@@ -1,3 +1,13 @@
+---
+title: DataViz AI
+emoji: 📊
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # DataViz AI
 
 AI-powered data intelligence and visualization platform.
