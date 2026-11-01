@@ -7,7 +7,7 @@ logger = get_logger("app.ai.agents.semantic_inferrer")
 
 INFERENCE_PROMPT = """
 You are the **Universal Semantic Schema & Domain Inferrer Agent**.
-Your job is to examine ANY tabular dataset (regardless of column naming, industry, or format) and infer its semantic roles, primary targets, and domain context.
+Your job is to examine ANY tabular dataset (regardless of column naming, industry, or format) and infer its semantic roles, primary targets, domain context, and natural business entity.
 
 Dataset Name: {dataset_name}
 Total Rows: {total_rows}
@@ -20,21 +20,26 @@ Sample Rows:
 {sample_rows}
 
 Instructions:
-1. Detect the **domain_theme** (e.g. "E-Commerce / Retail Sales", "Telecom Customer Churn", "Streaming Media / Music Analytics", "Healthcare / Clinical Operations", "B2B SaaS / Subscriptions", "IoT Sensor Logs", "Financial Transactions").
-2. Identify:
-   - `primary_metric`: The most important continuous numerical measure to optimize or investigate (e.g., Sales, Revenue, Streams, MonthlyCharges, TotalBill, Temperature).
-   - `secondary_metrics`: Other numeric metrics (e.g., Profit, Discount, Tenure, BPM, Quantity, Age).
-   - `cohort_dimensions`: Categorical columns with 2 to 50 unique values that represent natural business segments (e.g., Region, Category, Contract, Genre, Status).
+1. Detect the **domain_theme** (e.g. "Human Resources / Employee Retention", "E-Commerce / Retail Sales", "Telecom Customer Churn", "Streaming Media / Music Analytics", "Healthcare / Clinical Operations", "B2B SaaS / Subscriptions", "IoT Sensor Logs", "Financial Risk / Credit").
+2. Detect the **entity_name** (plural noun representing what each row is, e.g. "employees", "transactions", "customers", "patients", "orders", "songs", "flights", "items").
+3. Identify:
+   - `primary_metric`: The most important continuous numerical measure to optimize or investigate (e.g., MonthlyIncome, Sales, Revenue, Streams, MonthlyCharges, TotalBill, Temperature).
+   - `secondary_metrics`: Other numeric metrics (e.g., TotalWorkingYears, YearsAtCompany, Profit, Discount, Tenure, Age).
+   - `target_or_outcome_column`: If there is a key binary/status column representing an outcome (e.g., Attrition, Churn, Loan_Status, Is_Fraud, Converted, Survived), identify it and its positive event value (e.g. "Yes", 1, "True").
+   - `cohort_dimensions`: Categorical columns with 2 to 50 unique values that represent natural business segments (e.g., Department, JobRole, OverTime, EducationField, Region, Category, Contract).
    - `temporal_dimensions`: Any date, time, year, or month columns.
-   - `entity_identifiers`: High-cardinality keys (ID, SKU, Name, Title).
-3. Outline the core strategic question for this domain (e.g. "What drives margin leakage and regional variance?", "Which customer cohorts have the highest churn hazard?").
+   - `entity_identifiers`: High-cardinality keys (ID, EmployeeNumber, SKU, Name).
+4. Outline the core strategic question for this domain (e.g. "What root drivers accelerate employee attrition, and how can retention be maximized?", "Which customer cohorts have the highest churn hazard?").
 
 Return ONLY a valid JSON object matching this schema:
 {{
   "domain_theme": "Industry / Domain Category",
+  "entity_name": "employees",
   "primary_metric": "Column_Name",
   "secondary_metrics": ["Col1", "Col2"],
-  "cohort_dimensions": ["ColA", "ColB"],
+  "target_column": "Outcome_Column_Or_Null",
+  "target_positive_value": "Yes_Or_Null",
+  "cohort_dimensions": ["ColA", "ColB", "ColC"],
   "temporal_dimensions": ["DateCol"],
   "entity_identifiers": ["IDCol"],
   "core_strategic_question": "High stakes executive inquiry..."
@@ -90,14 +95,17 @@ class SemanticInferrer:
         try:
             res = await provider.analyze_json(prompt=prompt)
             domain = res.get("domain_theme", "General Tabular Analytics")
+            entity = res.get("entity_name", "records")
             primary = res.get("primary_metric") or (num_cols[0] if num_cols else cols[0]["name"])
             secondary = res.get("secondary_metrics", [c for c in num_cols if c != primary])
             cohorts = res.get("cohort_dimensions", cat_cols[:4])
             temporals = res.get("temporal_dimensions", date_cols)
             strategic_q = res.get("core_strategic_question", "What are the primary operational performance drivers?")
+            target_col = res.get("target_column")
+            target_val = res.get("target_positive_value")
 
-            print(f"   [Semantic Inferrer] Domain: \"{domain}\"")
-            print(f"   [Semantic Inferrer] Primary Metric: [{primary}] | Secondary: {secondary}")
+            print(f"   [Semantic Inferrer] Domain: \"{domain}\" | Entity: \"{entity}\"")
+            print(f"   [Semantic Inferrer] Primary Metric: [{primary}] | Target: [{target_col} = {target_val}]")
             print(f"   [Semantic Inferrer] Cohort Dimensions: {cohorts} | Temporal: {temporals}")
             print(f"   [Semantic Inferrer] Strategic Focus: \"{strategic_q}\"")
 
@@ -105,13 +113,16 @@ class SemanticInferrer:
                 await on_event({
                     "type": "thought",
                     "agent": "Semantic Inferrer",
-                    "thought": f"Domain identified: '{domain}'. Primary metric selected: '{primary}' with {len(secondary)} secondary metrics and {len(cohorts)} cohort dimensions."
+                    "thought": f"Domain identified: '{domain}' ({entity}). Primary metric: '{primary}'. Cohorts: {', '.join(cohorts[:3])}."
                 })
 
             return {
                 "domain_theme": domain,
+                "entity_name": entity,
                 "primary_metric": primary,
                 "secondary_metrics": secondary,
+                "target_column": target_col,
+                "target_positive_value": target_val,
                 "cohort_dimensions": cohorts,
                 "temporal_dimensions": temporals,
                 "entity_identifiers": res.get("entity_identifiers", []),

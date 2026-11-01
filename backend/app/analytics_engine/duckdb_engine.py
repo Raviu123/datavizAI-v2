@@ -143,32 +143,35 @@ class DuckDBEngine:
     def generate_chart_data(file_path: str, x_axis: str, y_axis: str, agg: str = "SUM", limit: int = 15) -> List[Dict[str, Any]]:
         """
         Generates aggregated chart data points using DuckDB SQL queries.
+        Ensures output column aliases strictly synchronize with requested y_axis keys.
         """
         agg_upper = agg.upper() if agg in ["SUM", "AVG", "COUNT", "MIN", "MAX"] else "SUM"
+        resolved_path = DuckDBEngine._resolve_file_path(file_path)
+        val_alias = y_axis if y_axis and y_axis != x_axis else "count"
         
         if agg_upper == "COUNT" or not y_axis or x_axis == y_axis:
             query = f"""
-                SELECT "{x_axis}" AS {x_axis}, COUNT(*) AS count 
+                SELECT "{x_axis}" AS "{x_axis}", COUNT(*) AS "{val_alias}" 
                 FROM dataset 
                 WHERE "{x_axis}" IS NOT NULL 
-                GROUP BY "{x_axis}" 
-                ORDER BY count DESC 
+                GROUP BY 1 
+                ORDER BY 2 DESC 
                 LIMIT {limit}
             """
         else:
             query = f"""
-                SELECT "{x_axis}" AS {x_axis}, {agg_upper}("{y_axis}") AS {y_axis} 
+                SELECT "{x_axis}" AS "{x_axis}", {agg_upper}("{y_axis}") AS "{val_alias}" 
                 FROM dataset 
                 WHERE "{x_axis}" IS NOT NULL AND "{y_axis}" IS NOT NULL 
-                GROUP BY "{x_axis}" 
-                ORDER BY {y_axis} DESC 
+                GROUP BY 1 
+                ORDER BY 2 DESC 
                 LIMIT {limit}
             """
         try:
-            return DuckDBEngine.query_file(file_path, query)
+            return DuckDBEngine.query_file(resolved_path, query)
         except Exception:
-            fallback_query = f'SELECT "{x_axis}", "{y_axis}" FROM dataset LIMIT {limit}'
+            fallback_query = f'SELECT "{x_axis}", "{y_axis}" FROM dataset WHERE "{x_axis}" IS NOT NULL LIMIT {limit}'
             try:
-                return DuckDBEngine.query_file(file_path, fallback_query)
+                return DuckDBEngine.query_file(resolved_path, fallback_query)
             except Exception:
                 return []

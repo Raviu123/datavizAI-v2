@@ -69,6 +69,62 @@ export const datasetApi = {
     });
     return response.data;
   },
+
+  streamChatWithData: async (
+    datasetId: string,
+    message: string,
+    conversationId: string | undefined,
+    onEvent: (event: any) => void,
+    signal?: AbortSignal
+  ) => {
+    const url = `${API_BASE_URL}/chat/stream`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/event-stream',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        dataset_id: datasetId,
+        message,
+        conversation_id: conversationId,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Chat stream failed: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('ReadableStream not supported.');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop() || '';
+
+      for (const chunk of chunks) {
+        const trimmed = chunk.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+            onEvent(data);
+          } catch (e) {
+            console.warn('[Chat SSE JSON parse error]', trimmed, e);
+          }
+        }
+      }
+    }
+  },
 };
 
 export const liveDataSourceApi = {

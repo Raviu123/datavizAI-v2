@@ -1,337 +1,333 @@
 import json
+import time
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, AsyncGenerator
 from app.analytics_engine.duckdb_engine import DuckDBEngine
 from app.ai.providers.factory import LLMProviderFactory
 from app.core.logging import get_logger
 
 logger = get_logger("app.ai.agent")
 
-AGENT_SYSTEM_PROMPT = """
-You are an expert Data Analyst & Autonomous Analytics Agent.
-Your goal is to parse user questions about a dataset and output accurate DuckDB SQL queries or identify out-of-scope questions.
+AGENT_REACT_SYSTEM_PROMPT = """
+You are an expert Autonomous Data Analyst Agent.
+You are directly connected to an active dataset loaded in a DuckDB SQL sandbox under table name `dataset`.
+You have real-time analytical tools to inspect schema, sample column values, execute queries, and answer ANY data questions.
 
-Schema & Context:
-- Table Name: `dataset`
-- Exact Column Names, Types, and Profiles are provided in the prompt.
-- Always use double quotes around column names in SQL (e.g. `SELECT DISTINCT "Product_Category" FROM dataset`).
+Available Tools:
+1. `execute_sql(sql_query)`:
+   Run read-only DuckDB SQL against `dataset`. Always use double quotes around column names (e.g. `SELECT "Department", COUNT(*) as "Headcount" FROM dataset GROUP BY 1 ORDER BY 2 DESC`).
+2. `get_column_values(column_name, limit)`:
+   Inspect distinct values in a column to verify exact spellings, case sensitivity, or category values (e.g. checking whether Attrition is 'Yes'/'No' or True/False).
+3. `finish(answer, wants_chart, chart_type, title)`:
+   Conclude your analysis and provide the final natural language answer to the user, formatted with clean markdown, citing exact numbers from your query results.
 
-Query Generation & Intent Guidelines:
-
-1. **Listing & Distinct Value Inquiries** (e.g. "which are all the products available?", "list products", "show all sales reps", "what categories exist"):
-   - Find the matching column (e.g., `Product_Category`, `Product_ID`, `Sales_Rep`, `Region`).
-   - Generate: `SELECT DISTINCT "Column_Name" FROM dataset WHERE "Column_Name" IS NOT NULL ORDER BY 1 LIMIT 50`.
-   - Set `"intent": "sql_query"`.
-
-2. **Trend & Time-Series Queries** (e.g., "sales trend", "monthly revenue", "over time"):
-   - Use date truncation or strftime: `SELECT STRFTIME(TRY_CAST("Date" AS DATE), '%Y-%m') AS "Month", SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE "Date" IS NOT NULL GROUP BY 1 ORDER BY 1`.
-   - Set `"intent": "sql_query"`, `"wants_chart": true` and `"chart_type": "line"`.
-
-3. **Quarterly & Filtered Queries** (e.g., "sales of electronics in 2nd quarter", "Q3 sales"):
-   - Filter by Quarter and Category: `SELECT SUM("Sales_Amount") AS "Total_Sales" FROM dataset WHERE EXTRACT(QUARTER FROM TRY_CAST("Date" AS DATE)) = 2 AND "Product_Category" = 'Electronics'`.
-   - Set `"intent": "sql_query"`.
-
-4. **Comparative & Top N Queries** (e.g., "top 5 products by revenue", "sales by region"):
-   - Use `GROUP BY` and `ORDER BY ... DESC LIMIT N`.
-   - Set `"intent": "sql_query"`, `"wants_chart": true` and `"chart_type": "bar"`.
-
-5. **Conversational Follow-up Questions** (e.g. "which region had the highest?", "now filter by electronics", "what about Q3?", "break that down by rep"):
-   - Use the Previous Conversation Context to understand what metrics/dimensions the user is asking about.
-   - Formulate the corresponding DuckDB SQL query. NEVER classify follow-up questions about the data as irrelevant.
-   - Set `"intent": "sql_query"`.
-
-6. **Pure Metadata Overview** (ONLY if prompt explicitly asks "describe dataset metadata", "overview of dataset", "what dataset is this", "explain dataset structure"):
-   - Set `"intent": "overview"` and `"sql": null`.
-
-7. **Irrelevant / Out-of-Scope Questions** (e.g. "who is donald trump?", "what is the capital of France?", "tell me a joke", "how to code python", general non-data questions unrelated to dataset analysis):
-   - Set `"intent": "irrelevant"` and `"sql": null`.
-
-Return ONLY a valid raw JSON object:
-{
-  "intent": "sql_query" | "overview" | "irrelevant",
-  "sql": "SELECT ... FROM dataset ..." or null,
-  "explanation": "Brief explanation...",
-  "wants_chart": boolean,
-  "chart_type": "line" | "bar" | "pie" | "scatter"
-}
+Guidelines:
+- **No Canned Refusals**: NEVER say a question is out of scope if it relates to the data, columns, summary, or business context. For broad questions like "what is this data about?", examine the columns and sample data, explain what the dataset represents, its core themes, and suggest 3 relevant analytical questions tailored to this dataset.
+- **Dynamic Reasoning**: Think through which columns and aggregations (ratios, counts, averages, distributions) are mathematically appropriate.
+- **Self-Correction**: If a tool call or SQL fails, observe the error and reformulate your query in the next cycle.
+- **Output Format**: In each turn, return ONLY a valid JSON object matching this schema:
+  {
+    "thought": "Your internal chain-of-thought explaining what you understand, what you are checking or calculating, and why...",
+    "action": "execute_sql" | "get_column_values" | "finish",
+    "params": { ... }
+  }
 """
 
-ANSWER_SYNTHESIS_PROMPT = """
-You are an expert Data Analyst. Synthesize a direct, executive-level natural language answer for the user's question based strictly on the executed query results.
+STEP_PROMPT_TEMPLATE = """
+Dataset Name: {dataset_name} ({total_rows:,} rows, {total_columns} columns)
 
-User Question: "{user_message}"
-Executed SQL Query: {sql_query}
-QueryResult Data (JSON):
-{query_data}
+Schema & Profiling:
+{columns_meta}
 
-Instructions:
-1. State exact items, numerical totals, key trends, peak periods, or top categories clearly.
-2. If query returned a list of distinct items/products/names, present them cleanly as a bulleted or comma-separated list.
-3. Keep the answer professional, concise, and formatted with clean markdown.
-"""
-
-OVERVIEW_SYNTHESIS_PROMPT = """
-You are an expert Data Analyst. Synthesize a dataset metadata overview.
-
-Dataset Name: {dataset_name}
-Total Rows: {total_rows:,}
-Total Columns: {total_columns}
-Categorical Dimensions: {cat_cols}
-Numeric Metrics: {num_cols}
-
-Sample Rows:
+Sample Preview Records:
 {sample_rows}
 
+Conversation History:
+{history_context}
+
 User Question: "{user_message}"
 
-Instructions:
-1. Summarize what this dataset represents, key metrics, and key dimensions.
-2. Suggest 2-3 specific analytical questions the user can ask next (e.g., "What is the sales trend over time?", "Top 5 products by revenue").
+Previous Agent Steps & Observations in this turn:
+{turn_history}
+
+Current ReAct Cycle: {cycle_num} of {max_cycles}
+
+What is your next step? Return ONLY valid JSON:
+- If you need to query DuckDB: {{"thought": "...", "action": "execute_sql", "params": {{"sql_query": "SELECT ..."}}}}
+- If you need to check column distinct values: {{"thought": "...", "action": "get_column_values", "params": {{"column_name": "...", "limit": 20}}}}
+- If you have gathered sufficient information to answer the user directly: {{"thought": "...", "action": "finish", "params": {{"answer": "Your comprehensive markdown answer...", "wants_chart": true/false, "chart_type": "bar"|"line"|"donut"|"composed"|"scatter"|"area", "title": "Chart Title"}}}}
 """
 
-IRRELEVANT_RESPONSE = (
-    "I am your dedicated **Data Analyst AI Assistant** focused exclusively on analyzing your uploaded dataset.\n\n"
-    "Your question appears to be unrelated to data analysis or the current dataset. "
-    "Please ask a question related to your data, such as:\n"
-    "- *What are the total sales by region?*\n"
-    "- *Which are all the products available?*\n"
-    "- *Show sales trend over time*\n"
-    "- *What is the average discount given?*"
-)
 
 class DataAnalystAgent:
     """
-    PandasAI-inspired Agentic Data Analyst Engine supporting tool calls, 
-    resilient SQL execution with auto-correction, temporal aggregations, distinct value listing, and smart visualization selection.
+    Truly Autonomous ReAct Data Analyst Agent.
+    Operates via multi-step iterative reasoning, DuckDB tool calling, error self-correction,
+    and real-time event streaming for interactive thinking disclosure.
     """
 
     def __init__(self, provider_name: Optional[str] = None):
         self.provider = LLMProviderFactory.get_provider(provider_name)
 
-    async def process_query(
-        self, 
-        dataset_record: Dict[str, Any], 
+    async def process_query_stream(
+        self,
+        dataset_record: Dict[str, Any],
         user_message: str,
-        history: Optional[List[Dict[str, str]]] = None
-    ) -> Dict[str, Any]:
+        history: Optional[List[Dict[str, Any]]] = None,
+        max_cycles: int = 4
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         d_name = dataset_record.get("name", "dataset")
         profile = dataset_record.get("profile", {})
         file_path = dataset_record.get("file_path")
-        sample_rows = dataset_record.get("preview_rows", [])[:5]
-
+        sample_rows = (dataset_record.get("preview_rows") or [])[:5]
         cols = profile.get("columns", [])
-        col_names = [c["name"] for c in cols]
-        num_cols = [c["name"] for c in cols if c.get("inferred_type") in ["integer", "float", "numeric"]]
-        cat_cols = [c["name"] for c in cols if c.get("inferred_type") == "categorical"]
-        date_cols = [c["name"] for c in cols if c.get("inferred_type") in ["datetime", "date"]]
 
-        msg_lower = user_message.lower()
+        # Build clean column profiling for context
+        clean_cols = []
+        for c in cols[:30]:
+            clean_cols.append({
+                "name": c["name"],
+                "type": c.get("inferred_type"),
+                "unique_count": c.get("unique_count"),
+                "null_pct": c.get("null_percentage", 0),
+                "samples": c.get("sample_values", [])[:3]
+            })
 
-        logger.info(f"[Agentic Analyst] Processing question: '{user_message}' on dataset '{d_name}'")
-
-        # Intent classification heuristics
-        listing_keywords = [
-            "list", "show", "get", "find", "display", "all", "which", "available", 
-            "avaibalbe", "product", "products", "item", "items", "category", "categories", 
-            "rep", "reps", "names", "values", "what products", "what categories", "who are"
-        ]
-        has_listing_intent = any(k in msg_lower for k in listing_keywords)
-
-        metric_keywords = [
-            "sale", "sales", "revenue", "profit", "cost", "trend", "q1", "q2", "q3", "q4", 
-            "month", "quarter", "year", "growth", "top", "highest", "lowest", "sum", "average", 
-            "avg", "total", "count", "compare", "region", "discount", "quantity", "price"
-        ]
-        has_metric_keywords = any(k in msg_lower for k in metric_keywords)
-
-        is_pure_overview = (
-            any(k in msg_lower for k in ["describe dataset", "overview of dataset", "what dataset is this", "dataset structure", "explain dataset"])
-            and not (has_metric_keywords or has_listing_intent)
-        )
-
-        if is_pure_overview:
-            logger.info("[Agentic Analyst] Routing to pure dataset metadata overview synthesis.")
-            return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
-
-        # Format historical turns for context
-        history_text = ""
+        # History formatting
+        history_text = "No previous conversation context."
         if history:
-            formatted_turns = []
-            for turn in history[-4:]:
-                role = "User" if turn.get("role") == "user" else "Assistant"
-                sql_context = f" (SQL was: {turn.get('sql')})" if turn.get("sql") else ""
-                formatted_turns.append(f"{role}: {turn.get('message', '')}{sql_context}")
-            history_text = f"\nPrevious Conversation Context (Use for context on follow-up questions):\n" + "\n".join(formatted_turns) + "\n"
+            turns = []
+            for h in history[-4:]:
+                role = h.get("role", "user").capitalize()
+                msg = h.get("message", "")
+                turns.append(f"{role}: {msg}")
+            history_text = "\n".join(turns)
 
-        # Build schema context for LLM SQL compilation
-        prompt = f"""
-Dataset Name: {d_name}
-Total Rows: {profile.get('total_rows', 0)}
-Total Columns: {profile.get('total_columns', 0)}
-{history_text}
-Columns & Inferred Types:
-{json.dumps(cols, indent=2)}
+        turn_history = []
+        executed_sqls = []
+        last_query_data = None
+        final_answer = None
+        visualization = None
 
-Detected Date Columns: {date_cols}
-Detected Metric Columns: {num_cols}
-Detected Categorical Columns: {cat_cols}
+        logger.info(f"[Agentic Analyst ReAct] Starting loop on '{d_name}' for question: \"{user_message}\"")
 
-Sample Rows (First 5):
-{json.dumps(sample_rows, indent=2)}
-
-User Question: "{user_message}"
-"""
-
-        sql_query = None
-        chart_data = None
-        chart_type = "bar"
-        wants_chart = False
-        ai_reply_text = ""
-
-        try:
-            # LLM SQL Compilation
-            logger.info("[Agentic Analyst] Compiling DuckDB SQL strategy...")
-            sql_payload = await self.provider.analyze_json(prompt=prompt, system_prompt=AGENT_SYSTEM_PROMPT)
-            
-            intent = sql_payload.get("intent", "sql_query")
-            if intent == "irrelevant":
-                logger.info("[Agentic Analyst] Question classified as irrelevant / out-of-scope.")
-                return {
-                    "message": IRRELEVANT_RESPONSE,
-                    "sql": None,
-                    "chart_data": None,
-                    "visualization": None
-                }
-
-            if intent == "overview":
-                logger.info("[Agentic Analyst] LLM classified question as overview request.")
-                return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
-
-            sql_query = sql_payload.get("sql")
-            wants_chart = sql_payload.get("wants_chart", False)
-            chart_type = sql_payload.get("chart_type", "bar")
-
-            # Fallback heuristic for listing queries if LLM omitted SQL
-            if not sql_query and has_listing_intent:
-                target_col = next((c for c in col_names if any(k in c.lower() for k in ["product", "item", "category", "rep", "name", "region"])), cat_cols[0] if cat_cols else col_names[0])
-                if target_col:
-                    sql_query = f'SELECT DISTINCT "{target_col}" FROM dataset WHERE "{target_col}" IS NOT NULL ORDER BY 1 LIMIT 50'
-
-            # Fallback heuristic for trend/time queries if LLM omitted SQL
-            elif not sql_query and any(k in msg_lower for k in ["trend", "month", "quarter", "q1", "q2", "q3", "q4", "over time", "year"]):
-                d_col = date_cols[0] if date_cols else next((c for c in col_names if "date" in c.lower() or "time" in c.lower()), col_names[0] if col_names else "")
-                m_col = num_cols[0] if num_cols else col_names[1] if len(col_names) > 1 else col_names[0]
-                if d_col and m_col:
-                    sql_query = f'SELECT STRFTIME(TRY_CAST("{d_col}" AS DATE), \'%Y-%m\') as "Period", SUM("{m_col}") as "{m_col}" FROM dataset WHERE "{d_col}" IS NOT NULL GROUP BY 1 ORDER BY 1'
-                    chart_type = "line"
-                    wants_chart = True
-
-            # Step 4: Multi-Pass DuckDB Query Execution with Auto-Correction
-            if sql_query and file_path:
-                logger.info(f"[Agentic Analyst] Executing SQL: {sql_query}")
-                try:
-                    chart_data = DuckDBEngine.query_file(file_path, sql_query)
-                except Exception as sql_err:
-                    logger.warning(f"[Agentic Analyst Auto-Correct] Initial SQL error ({sql_err}). Attempting auto-correction query...")
-                    corrected_sql = self._auto_correct_sql(sql_query, cols, msg_lower)
-                    sql_query = corrected_sql
-                    chart_data = DuckDBEngine.query_file(file_path, corrected_sql)
-
-            # Step 5: Synthesize Answer from Query Results
-            if chart_data and len(chart_data) > 0:
-                logger.info(f"[Agentic Analyst] Query returned {len(chart_data)} rows. Synthesizing natural language answer...")
-                synth_prompt = ANSWER_SYNTHESIS_PROMPT.format(
-                    user_message=user_message,
-                    sql_query=sql_query,
-                    query_data=json.dumps(chart_data[:25], indent=2)
-                )
-                try:
-                    ai_reply_text = await self.provider.generate(prompt=synth_prompt, temperature=0.1)
-                except Exception:
-                    ai_reply_text = f"Retrieved {len(chart_data)} analytical records for query '{user_message}'."
-            else:
-                logger.info("[Agentic Analyst] No data returned from SQL query. Generating metadata overview.")
-                return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
-
-            # Step 6: Smart Visualization Attachment
-            visualization = None
-            if (wants_chart or len(chart_data) >= 2) and chart_data:
-                first_row = chart_data[0]
-                keys = list(first_row.keys())
-                x_key = keys[0]
-                y_key = keys[1] if len(keys) > 1 else keys[0]
-
-                # Determine chart type: line for dates/months, bar for categories
-                if any(k in msg_lower for k in ["trend", "month", "over time", "yearly", "quarter", "timeline"]) or "month" in x_key.lower() or "date" in x_key.lower() or "period" in x_key.lower():
-                    chart_type = "line"
-
-                visualization = {
-                    "chart_type": chart_type,
-                    "title": f"Analytics: {user_message[:45]}",
-                    "config": {
-                        "xAxisKey": x_key,
-                        "yAxisKeys": [y_key],
-                        "colorPalette": ["#6366f1", "#10b981", "#f59e0b", "#ec4899"]
-                    },
-                    "data": chart_data
-                }
-
-            return {
-                "message": ai_reply_text,
-                "sql": sql_query,
-                "chart_data": chart_data,
-                "visualization": visualization
-            }
-
-        except Exception as outer_err:
-            logger.error(f"❌ [Agentic Analyst Pipeline Error] {type(outer_err).__name__}: {outer_err}")
-            return await self._synthesize_overview_response(d_name, profile, sample_rows, cat_cols, num_cols, user_message)
-
-    async def _synthesize_overview_response(
-        self, 
-        d_name: str, 
-        profile: Dict[str, Any], 
-        sample_rows: List[Dict[str, Any]], 
-        cat_cols: List[str], 
-        num_cols: List[str], 
-        user_message: str
-    ) -> Dict[str, Any]:
-        overview_prompt = OVERVIEW_SYNTHESIS_PROMPT.format(
-            dataset_name=d_name,
-            total_rows=profile.get('total_rows', 0),
-            total_columns=profile.get('total_columns', 0),
-            cat_cols=', '.join(cat_cols) if cat_cols else 'None',
-            num_cols=', '.join(num_cols) if num_cols else 'None',
-            sample_rows=json.dumps(sample_rows, indent=2),
-            user_message=user_message
-        )
-        try:
-            ai_reply_text = await self.provider.generate(prompt=overview_prompt, temperature=0.2)
-        except Exception:
-            ai_reply_text = (
-                f"Dataset **{d_name}** contains **{profile.get('total_rows', 0):,} rows** and **{profile.get('total_columns', 0)} columns**.\n\n"
-                f"• **Dimensions**: {', '.join(cat_cols[:5]) if cat_cols else 'N/A'}\n"
-                f"• **Metrics**: {', '.join(num_cols[:5]) if num_cols else 'N/A'}"
-            )
-        return {
-            "message": ai_reply_text,
-            "sql": None,
-            "chart_data": None,
-            "visualization": None
+        yield {
+            "type": "thought",
+            "thought": f"Analyzing question \"{user_message}\" in context of dataset '{d_name}' ({len(cols)} columns, {profile.get('total_rows', 0):,} rows)..."
         }
 
-    def _auto_correct_sql(self, original_sql: str, cols: List[Dict[str, Any]], msg_lower: str) -> str:
-        """Constructs a robust DuckDB fallback query if initial LLM SQL failed."""
-        col_names = [c["name"] for c in cols]
-        num_cols = [c["name"] for c in cols if c.get("inferred_type") in ["integer", "float", "numeric"]]
-        cat_cols = [c["name"] for c in cols if c.get("inferred_type") == "categorical"]
-        date_cols = [c["name"] for c in cols if c.get("inferred_type") in ["datetime", "date"]]
+        for cycle in range(1, max_cycles + 1):
+            prompt = STEP_PROMPT_TEMPLATE.format(
+                dataset_name=d_name,
+                total_rows=profile.get("total_rows", 0),
+                total_columns=profile.get("total_columns", len(cols)),
+                columns_meta=json.dumps(clean_cols, indent=2),
+                sample_rows=json.dumps(sample_rows[:3], indent=2),
+                history_context=history_text,
+                user_message=user_message,
+                turn_history=json.dumps(turn_history, indent=2) if turn_history else "No prior actions yet.",
+                cycle_num=cycle,
+                max_cycles=max_cycles
+            )
 
-        if any(k in msg_lower for k in ["trend", "month", "quarter", "over time"]) and (date_cols or col_names):
-            d_col = date_cols[0] if date_cols else col_names[0]
-            m_col = num_cols[0] if num_cols else (col_names[1] if len(col_names) > 1 else col_names[0])
-            return f'SELECT "{d_col}" AS "Period", SUM("{m_col}") AS "{m_col}" FROM dataset WHERE "{d_col}" IS NOT NULL GROUP BY 1 ORDER BY 1 LIMIT 20'
+            try:
+                decision = await self.provider.analyze_json(
+                    prompt=prompt,
+                    system_prompt=AGENT_REACT_SYSTEM_PROMPT
+                )
+            except Exception as e:
+                logger.warning(f"[Agentic Analyst] Decision parsing error: {e}")
+                decision = {
+                    "thought": f"Encountered parsing nuance, checking column distributions directly.",
+                    "action": "finish",
+                    "params": {"answer": f"I reviewed the dataset **{d_name}** ({profile.get('total_rows', 0):,} rows across {len(cols)} columns). How can I assist you with specific calculations?"}
+                }
 
-        cat = cat_cols[0] if cat_cols else col_names[0]
-        num = num_cols[0] if num_cols else (col_names[1] if len(col_names) > 1 else col_names[0])
-        return f'SELECT "{cat}", SUM("{num}") AS "{num}" FROM dataset GROUP BY "{cat}" ORDER BY "{num}" DESC LIMIT 10'
+            thought = decision.get("thought", "Evaluating next step...")
+            action = decision.get("action", "finish")
+            params = decision.get("params", {})
+
+            yield {
+                "type": "thought",
+                "cycle": cycle,
+                "thought": thought
+            }
+
+            if action == "execute_sql":
+                sql = params.get("sql_query", "")
+                if not sql and "sql" in params:
+                    sql = params["sql"]
+
+                yield {
+                    "type": "tool_call",
+                    "cycle": cycle,
+                    "action": "execute_sql",
+                    "sql": sql,
+                    "params": params
+                }
+
+                t0 = time.time()
+                obs_text = ""
+                data_rows = []
+                try:
+                    resolved_path = DuckDBEngine._resolve_file_path(file_path) if file_path else file_path
+                    data_rows = DuckDBEngine.query_file(resolved_path, sql)
+                    elapsed_ms = round((time.time() - t0) * 1000, 2)
+                    last_query_data = data_rows
+                    executed_sqls.append(sql)
+                    row_count = len(data_rows)
+                    top_sample = data_rows[:3] if data_rows else []
+                    obs_text = f"DuckDB executed query in {elapsed_ms}ms. Returned {row_count} rows. Top records: {json.dumps(top_sample)}"
+                except Exception as sql_err:
+                    elapsed_ms = round((time.time() - t0) * 1000, 2)
+                    obs_text = f"DuckDB Error in {elapsed_ms}ms: {str(sql_err)}. Reformulate query to use correct column names."
+
+                yield {
+                    "type": "tool_result",
+                    "cycle": cycle,
+                    "action": "execute_sql",
+                    "observation": obs_text,
+                    "rows_count": len(data_rows),
+                    "sample": data_rows[:3] if data_rows else None
+                }
+
+                turn_history.append({
+                    "cycle": cycle,
+                    "action": "execute_sql",
+                    "sql": sql,
+                    "observation": obs_text
+                })
+
+            elif action == "get_column_values":
+                col = params.get("column_name", "")
+                limit = params.get("limit", 20)
+
+                yield {
+                    "type": "tool_call",
+                    "cycle": cycle,
+                    "action": "get_column_values",
+                    "params": {"column": col, "limit": limit}
+                }
+
+                sample_vals = []
+                try:
+                    resolved_path = DuckDBEngine._resolve_file_path(file_path) if file_path else file_path
+                    sql = f'SELECT DISTINCT "{col}" FROM dataset WHERE "{col}" IS NOT NULL ORDER BY 1 LIMIT {limit}'
+                    res = DuckDBEngine.query_file(resolved_path, sql)
+                    sample_vals = [r.get(col) for r in res]
+                    obs_text = f"Distinct values for column '{col}': {json.dumps(sample_vals[:15])}"
+                except Exception as err:
+                    obs_text = f"Failed to sample column values: {err}"
+
+                yield {
+                    "type": "tool_result",
+                    "cycle": cycle,
+                    "action": "get_column_values",
+                    "observation": obs_text,
+                    "sample_values": sample_vals
+                }
+
+                turn_history.append({
+                    "cycle": cycle,
+                    "action": "get_column_values",
+                    "column": col,
+                    "observation": obs_text
+                })
+
+            elif action == "finish":
+                final_answer = params.get("answer") or params.get("response") or params.get("message") or params.get("final_answer", "")
+                wants_chart = params.get("wants_chart", False)
+                chart_type = params.get("chart_type", "bar")
+                chart_title = params.get("title", f"Analysis: {user_message[:45]}")
+
+                # Build chart visualization if data is available and suitable
+                if last_query_data and len(last_query_data) >= 2:
+                    first_row = last_query_data[0]
+                    keys = list(first_row.keys())
+                    if len(keys) >= 2:
+                        x_key = keys[0]
+                        y_keys = [k for k in keys if k != x_key]
+                        if not y_keys:
+                            y_keys = [keys[1]] if len(keys) > 1 else [keys[0]]
+
+                        # Validate chart type
+                        valid_types = ["bar", "line", "area", "donut", "pie", "scatter", "composed"]
+                        chosen_type = chart_type.lower() if chart_type.lower() in valid_types else "bar"
+
+                        # Time-series auto check
+                        x_val_sample = str(first_row.get(x_key, "")).lower()
+                        if any(k in x_key.lower() for k in ["date", "time", "month", "year", "quarter"]) or re.match(r'^\d{4}-\d{2}', x_val_sample):
+                            chosen_type = "line"
+
+                        visualization = {
+                            "chart_type": chosen_type,
+                            "title": chart_title,
+                            "config": {
+                                "xAxisKey": x_key,
+                                "yAxisKeys": y_keys,
+                                "colorPalette": ["#6366f1", "#10b981", "#f59e0b", "#ec4899", "#06b6d4"]
+                            },
+                            "data": last_query_data[:30]
+                        }
+
+                break
+
+        # Fallback synthesis if finish was not explicitly reached
+        if not final_answer:
+            if last_query_data:
+                final_answer = f"Based on the analytical query results:\n\n"
+                for r in last_query_data[:10]:
+                    final_answer += f"- " + ", ".join(f"**{k}**: {v}" for k, v in r.items()) + "\n"
+            else:
+                final_answer = (
+                    f"Dataset **{d_name}** is loaded and ready for analysis ({profile.get('total_rows', 0):,} records across {len(cols)} columns). "
+                    f"You can ask me to calculate rates, discover patterns, compare cohorts, or find anomalies across any dimensions."
+                )
+
+        final_sql = executed_sqls[-1] if executed_sqls else None
+
+        yield {
+            "type": "final_answer",
+            "message": final_answer,
+            "sql": final_sql,
+            "chart_data": last_query_data,
+            "visualization": visualization
+        }
+
+    async def process_query(
+        self,
+        dataset_record: Dict[str, Any],
+        user_message: str,
+        history: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """Backwards-compatible non-streaming runner."""
+        last_event = None
+        thoughts = []
+        tool_calls = []
+
+        async for event in self.process_query_stream(dataset_record, user_message, history):
+            if event.get("type") == "thought" and event.get("thought"):
+                thoughts.append(event["thought"])
+            elif event.get("type") == "tool_call":
+                tool_calls.append(event)
+            elif event.get("type") == "final_answer":
+                last_event = event
+
+        if not last_event:
+            return {
+                "message": "Query execution completed.",
+                "sql": None,
+                "chart_data": None,
+                "visualization": None,
+                "thoughts": thoughts,
+                "tool_calls": tool_calls
+            }
+
+        return {
+            "message": last_event.get("message", ""),
+            "sql": last_event.get("sql"),
+            "chart_data": last_event.get("chart_data"),
+            "visualization": last_event.get("visualization"),
+            "thoughts": thoughts,
+            "tool_calls": tool_calls
+        }

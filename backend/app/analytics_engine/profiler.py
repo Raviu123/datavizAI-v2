@@ -21,13 +21,19 @@ class DataProfiler:
             non_null_count = int(series.count())
             null_count = int(series.isnull().sum())
             null_percentage = round((null_count / total_rows) * 100, 2) if total_rows > 0 else 0
-            unique_count = int(series.nunique())
+            try:
+                unique_count = int(series.nunique())
+            except TypeError:
+                unique_count = int(series.astype(str).nunique())
 
             # Infer data type
             inferred_type = DataProfiler._infer_column_type(series)
 
             # Extract sample values (top 5 non-null)
-            sample_values = series.dropna().unique()[:5].tolist()
+            try:
+                sample_values = series.dropna().unique()[:5].tolist()
+            except TypeError:
+                sample_values = series.dropna().astype(str).unique()[:5].tolist()
             # Convert numpy/pandas types to standard python types for JSON serialization
             sample_values = [DataProfiler._clean_value(val) for val in sample_values]
 
@@ -53,7 +59,10 @@ class DataProfiler:
                         "std": DataProfiler._clean_value(round(numeric_series.std(), 2)) if len(numeric_series) > 1 else 0
                     }
             elif inferred_type == "categorical":
-                val_counts = series.value_counts().head(5).to_dict()
+                try:
+                    val_counts = series.value_counts().head(5).to_dict()
+                except TypeError:
+                    val_counts = series.astype(str).value_counts().head(5).to_dict()
                 col_meta["stats"] = {
                     "top_categories": {str(k): int(v) for k, v in val_counts.items()}
                 }
@@ -87,6 +96,13 @@ class DataProfiler:
         elif "bool" in dtype_str:
             return "boolean"
         
+        # Check if series can be numeric (e.g. numeric values formatted as strings)
+        numeric_test = pd.to_numeric(series.dropna(), errors="coerce")
+        if not numeric_test.empty and (numeric_test.notnull().sum() / len(series.dropna())) > 0.85:
+            if (numeric_test % 1 == 0).all():
+                return "integer"
+            return "float"
+
         # Try datetime conversion for string series
         cleaned = series.dropna().astype(str)
         if cleaned.empty:
@@ -102,8 +118,15 @@ class DataProfiler:
                 pass
 
         # Distinguish between categorical and text
-        unique_ratio = series.nunique() / len(series) if len(series) > 0 else 1.0
-        if unique_ratio < 0.2 or series.nunique() <= 30:
+        try:
+            unique_ratio = series.nunique() / len(series) if len(series) > 0 else 1.0
+            is_few_uniques = series.nunique() <= 30
+        except TypeError:
+            s_str = series.astype(str)
+            unique_ratio = s_str.nunique() / len(s_str) if len(s_str) > 0 else 1.0
+            is_few_uniques = s_str.nunique() <= 30
+
+        if unique_ratio < 0.2 or is_few_uniques:
             return "categorical"
 
         return "text"

@@ -179,6 +179,11 @@ class ExecutiveReportOrchestrator:
                 })
 
                 kpis = []
+                entity_label = semantics.get("entity_name") or "records"
+                single_entity = entity_label.rstrip("s") if entity_label.endswith("s") and len(entity_label) > 2 else entity_label
+                target_col = semantics.get("target_column")
+                target_val = semantics.get("target_positive_value")
+
                 if primary_met:
                     try:
                         kpi_sql = f'SELECT SUM("{primary_met}") as total, AVG("{primary_met}") as avg, COUNT(*) as count FROM dataset'
@@ -197,21 +202,38 @@ class ExecutiveReportOrchestrator:
                             kpis.append({
                                 "label": f"Total {primary_met.replace('_', ' ')}",
                                 "value": f"{tot:,.2f}" if isinstance(tot, float) else f"{tot:,}",
-                                "subtext": f"Across {cnt:,} operational units",
+                                "subtext": f"Across {cnt:,} {entity_label}",
                                 "status": "positive"
                             })
                             kpis.append({
                                 "label": f"Average {primary_met.replace('_', ' ')}",
                                 "value": f"{avg:,.2f}" if isinstance(avg, float) else f"{avg:,}",
-                                "subtext": "Mean unit volume",
+                                "subtext": f"Mean per {single_entity}",
                                 "status": "neutral"
                             })
-                            await emit({
-                                "type": "tool_result",
-                                "agent": "DuckDB Analytics Engine",
-                                "action": "execute_sql",
-                                "observation": f"Aggregated {len(kpis)} global KPIs across {cnt:,} records.",
-                            })
+
+                        # If a key outcome/target was identified, calculate its benchmark rate KPI
+                        if target_col and target_val:
+                            try:
+                                rate_sql = f'SELECT COUNT(*) FILTER (WHERE CAST("{target_col}" AS VARCHAR) = \'{target_val}\') * 100.0 / COUNT(*) as target_rate FROM dataset'
+                                rate_res = DuckDBEngine.query_file(file_path, rate_sql)
+                                if rate_res and rate_res[0].get("target_rate") is not None:
+                                    t_rate = float(rate_res[0]["target_rate"])
+                                    kpis.append({
+                                        "label": f"Overall {target_col.replace('_', ' ')} Rate",
+                                        "value": f"{t_rate:.1f}%",
+                                        "subtext": f"{target_col} = '{target_val}' prevalence",
+                                        "status": "warning" if t_rate > 15 else "neutral"
+                                    })
+                            except Exception as re:
+                                logger.debug(f"Target rate computation skipped: {re}")
+
+                        await emit({
+                            "type": "tool_result",
+                            "agent": "DuckDB Analytics Engine",
+                            "action": "execute_sql",
+                            "observation": f"Aggregated {len(kpis)} global KPIs across {cnt:,} {entity_label}.",
+                        })
                     except Exception as e:
                         logger.warning(f"Error computing global KPIs: {e}")
 

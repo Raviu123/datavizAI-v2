@@ -66,7 +66,7 @@ async def connect_live_source_url(
     if isinstance(payload, list):
         records = payload
     elif isinstance(payload, dict):
-        records = payload.get("orders") or payload.get("data") or payload.get("items") or [payload]
+        records = payload.get("orders") or payload.get("data") or payload.get("items") or payload.get("results") or [payload]
 
     if not records or not isinstance(records, list):
         raise HTTPException(status_code=400, detail="Live URL payload did not return a valid list of records or orders.")
@@ -185,7 +185,7 @@ async def poll_live_data_feed(
     if isinstance(raw_payload, list):
         records = raw_payload
     elif isinstance(raw_payload, dict):
-        records = raw_payload.get("orders") or raw_payload.get("data") or raw_payload.get("items") or [raw_payload]
+        records = raw_payload.get("orders") or raw_payload.get("data") or raw_payload.get("items") or raw_payload.get("results") or [raw_payload]
 
     # Query in-memory table using DuckDB
     df = pd.DataFrame(records)
@@ -208,7 +208,7 @@ async def poll_live_data_feed(
         if x_axis and x_axis in df.columns:
             try:
                 if y_axis in df.columns and x_axis != y_axis:
-                    sql = f'SELECT "{x_axis}" as "{x_axis}", {agg}("{y_axis}") as "{y_axis}" FROM live_records GROUP BY "{x_axis}" ORDER BY "{y_axis}" DESC LIMIT 15'
+                    sql = f'SELECT "{x_axis}" as "{x_axis}", {agg}(TRY_CAST("{y_axis}" AS DOUBLE)) as "{y_axis}" FROM live_records GROUP BY "{x_axis}" ORDER BY "{y_axis}" DESC LIMIT 15'
                 else:
                     sql = f'SELECT "{x_axis}" as "{x_axis}", COUNT(*) as count FROM live_records GROUP BY "{x_axis}" ORDER BY count DESC LIMIT 15'
                 res_df = conn.execute(sql).fetchdf()

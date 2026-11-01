@@ -29,15 +29,54 @@ interface ChartEngineProps {
   onConfigChange?: (updatedStrategy: VisualStrategySpec) => void;
 }
 
+const SUPPORTED_CHARTS = ['bar', 'line', 'area', 'pie', 'donut', 'scatter', 'radar', 'composed', 'treemap', 'funnel', 'gauge', 'bubble', 'kpi'];
+
 export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChange }) => {
-  const [currentChartType, setCurrentChartType] = useState<string>(strategy.chart_type || 'bar');
+  const initialType = (strategy.chart_type || 'bar').toLowerCase();
+  const [currentChartType, setCurrentChartType] = useState<string>(
+    SUPPORTED_CHARTS.includes(initialType) ? initialType : 'bar'
+  );
   const [showConfig, setShowConfig] = useState(false);
   const [isStacked, setIsStacked] = useState<boolean>(strategy.config?.stacked ?? false);
 
-  const { title, description, config, data } = strategy;
+  const { title, description, config = {}, data = [] } = strategy;
+
+  // Dynamically normalize data: format booleans and inspect keys
+  const normalizedData = React.useMemo(() => {
+    if (!data || !Array.isArray(data) || data.length === 0) return [];
+    return data.map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const cleanRow: Record<string, any> = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (typeof v === 'boolean') {
+          cleanRow[k] = v ? 'Yes' : 'No';
+        } else {
+          cleanRow[k] = v;
+        }
+      }
+      return cleanRow;
+    });
+  }, [data]);
+
+  // Safeguard: dynamically bind actual data keys so no chart renders blank
+  const dataKeys = normalizedData.length > 0 ? Object.keys(normalizedData[0]) : [];
+  const actualXKey = config.xAxisKey && dataKeys.includes(config.xAxisKey)
+    ? config.xAxisKey
+    : (dataKeys[0] || 'x');
+
+  const declaredY = Array.isArray(config.yAxisKeys)
+    ? config.yAxisKeys
+    : (config.yAxisKeys ? [config.yAxisKeys] : []);
+  const validDeclaredY = declaredY.filter((k: string) => dataKeys.includes(k) && k !== actualXKey);
+  const fallbackY = dataKeys.filter((k: string) => k !== actualXKey);
+  const actualYKeys = validDeclaredY.length > 0
+    ? validDeclaredY
+    : (fallbackY.length > 0 ? fallbackY : [dataKeys[1] || 'value']);
 
   const activeConfig = {
     ...config,
+    xAxisKey: actualXKey,
+    yAxisKeys: actualYKeys,
     stacked: isStacked,
   };
 
@@ -45,33 +84,33 @@ export const ChartEngine: React.FC<ChartEngineProps> = ({ strategy, onConfigChan
     const cfg = activeConfig as any;
     switch (currentChartType.toLowerCase()) {
       case 'bar':
-        return <BarChartComponent data={data} config={cfg} />;
+        return <BarChartComponent data={normalizedData} config={cfg} />;
       case 'line':
-        return <LineChartComponent data={data} config={cfg} />;
+        return <LineChartComponent data={normalizedData} config={cfg} />;
       case 'area':
-        return <AreaChartComponent data={data} config={cfg} />;
+        return <AreaChartComponent data={normalizedData} config={cfg} />;
       case 'pie':
-        return <PieDonutChartComponent data={data} config={cfg} isDonut={false} />;
+        return <PieDonutChartComponent data={normalizedData} config={cfg} isDonut={false} />;
       case 'donut':
-        return <PieDonutChartComponent data={data} config={cfg} isDonut={true} />;
+        return <PieDonutChartComponent data={normalizedData} config={cfg} isDonut={true} />;
       case 'scatter':
-        return <ScatterPlotComponent data={data} config={cfg} />;
+        return <ScatterPlotComponent data={normalizedData} config={cfg} />;
       case 'radar':
-        return <RadarChartComponent data={data} config={cfg} />;
+        return <RadarChartComponent data={normalizedData} config={cfg} />;
       case 'composed':
-        return <ComposedChartComponent data={data} config={cfg} />;
+        return <ComposedChartComponent data={normalizedData} config={cfg} />;
       case 'treemap':
-        return <TreemapComponent data={data} config={cfg} />;
+        return <TreemapComponent data={normalizedData} config={cfg} />;
       case 'funnel':
-        return <FunnelComponent data={data} config={cfg} />;
+        return <FunnelComponent data={normalizedData} config={cfg} />;
       case 'gauge':
-        return <GaugeComponent data={data} config={cfg} />;
+        return <GaugeComponent data={normalizedData} config={cfg} />;
       case 'bubble':
-        return <BubbleChartComponent data={data} config={cfg} />;
+        return <BubbleChartComponent data={normalizedData} config={cfg} />;
       case 'kpi':
         return <KpiCardComponent title={title} description={description} config={cfg} />;
       default:
-        return <BarChartComponent data={data} config={cfg} />;
+        return <BarChartComponent data={normalizedData} config={cfg} />;
     }
   };
 

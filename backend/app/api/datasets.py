@@ -313,6 +313,11 @@ async def generate_selected_charts(
         y_axis = y_keys[0] if y_keys else x_axis
         agg = cfg.get("aggregation", "SUM")
 
+        # Normalize chart type to supported frontend components
+        supported_types = ["bar", "line", "area", "pie", "donut", "scatter", "radar", "composed", "treemap", "funnel", "gauge", "bubble", "kpi"]
+        raw_type = str(spec.get("chart_type", "bar")).lower()
+        spec["chart_type"] = raw_type if raw_type in supported_types else "bar"
+
         if spec.get("chart_type") == "kpi":
             if y_axis:
                 res = DuckDBEngine.query_file(file_path, f'SELECT SUM("{y_axis}") as total, AVG("{y_axis}") as avg FROM dataset')
@@ -327,6 +332,16 @@ async def generate_selected_charts(
             t1 = pd.Timestamp.now()
             elapsed_ms = round((t1 - t0).total_seconds() * 1000, 2)
             spec["data"] = computed_data or []
+
+            # Synchronize configuration keys with actual DuckDB column names
+            if computed_data and len(computed_data) > 0:
+                data_keys = list(computed_data[0].keys())
+                actual_x = x_axis if x_axis in data_keys else data_keys[0]
+                cfg["xAxisKey"] = actual_x
+                actual_y = [k for k in data_keys if k != actual_x]
+                if actual_y:
+                    cfg["yAxisKeys"] = actual_y
+
             logs.append(f"[{pd.Timestamp.now().isoformat()}] DuckDB Query '{x_axis} vs {y_axis} ({agg})' completed in {elapsed_ms}ms ({len(spec['data'])} data points)")
 
     ai_analysis = dataset.ai_analysis or {}

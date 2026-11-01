@@ -22,10 +22,11 @@ class ChartDesignerAgent:
         logger.info("[Agent 4: Chart Designer] Designing visualizations")
 
         designed_findings = []
+        donut_count = 0
+
         for idx, f in enumerate(executed_findings):
             data = f.get("data", [])
             dim = f.get("dimension")
-            met = f.get("metric")
 
             if not data:
                 f["chart"] = None
@@ -37,19 +38,28 @@ class ChartDesignerAgent:
             x_key = keys[0] if keys else dim
             y_keys = [keys[1]] if len(keys) > 1 else [keys[0]]
 
-            # Determine optimal chart type
-            is_date = any(k in str(x_key).lower() for k in ["date", "time", "month", "year", "day", "period"])
             row_count = len(data)
+            is_date = any(k in str(x_key).lower() for k in ["date", "time", "month", "year", "day", "period"])
+            suggested = (f.get("suggested_chart") or "").lower().strip()
 
+            # Dynamic chart type resolution ensuring high visual diversity
             if is_date:
                 chart_type = "line"
-            elif row_count <= 5 and any(k in f.get("title", "").lower() for k in ["share", "distribution", "mix", "proportion"]):
+            elif suggested == "composed" and len(keys) >= 3:
+                chart_type = "composed"
+                y_keys = keys[1:3]
+            elif suggested == "donut" and 2 <= row_count <= 6 and donut_count == 0:
                 chart_type = "donut"
-            elif row_count > 8 and any(k in f.get("title", "").lower() for k in ["volume", "hierarchy", "product", "sku"]):
-                chart_type = "treemap"
+                donut_count += 1
+            elif suggested in ["bar", "line", "treemap", "area"] and suggested != "donut":
+                chart_type = suggested
+                if len(keys) >= 3 and chart_type == "bar":
+                    y_keys = keys[1:3]
             elif len(keys) >= 3:
                 chart_type = "composed"
                 y_keys = keys[1:3]
+            elif row_count > 8 and any(k in f.get("title", "").lower() for k in ["volume", "hierarchy", "product", "sku"]):
+                chart_type = "treemap"
             else:
                 chart_type = "bar"
 

@@ -5,6 +5,7 @@ import { ChartEngine } from '@/components/charts/ChartEngine';
 import { datasetApi } from '@/lib/api-client';
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer';
 import { CollapsibleQueryDetails } from '@/components/shared/CollapsibleQueryDetails';
+import { ThinkingProcessDisclosure, ThinkingStep } from '@/components/shared/ThinkingProcessDisclosure';
 import {
   MessageSquare,
   Sparkles,
@@ -32,6 +33,8 @@ interface Message {
   sql?: string;
   visualization?: any;
   timestamp: string;
+  thinkingSteps?: ThinkingStep[];
+  isStreaming?: boolean;
 }
 
 export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
@@ -80,7 +83,7 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || isTyping) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -89,37 +92,137 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const aiMsgId = (Date.now() + 1).toString();
+    const initialAiMsg: Message = {
+      id: aiMsgId,
+      sender: 'ai',
+      text: '',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      thinkingSteps: [],
+      isStreaming: true,
+    };
+
+    setMessages((prev) => [...prev, userMsg, initialAiMsg]);
     const promptText = input;
     setInput('');
     setIsTyping(true);
 
     try {
-      const res = await datasetApi.chatWithData(datasetId, promptText, conversationId);
-      if (res.conversation_id) {
-        setConversationId(res.conversation_id);
-      }
-
-      const aiMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: 'ai',
-        text: res.message || 'Query processed.',
-        sql: res.sql,
-        visualization: res.visualization,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      setMessages((prev) => [...prev, aiMsg]);
+      await datasetApi.streamChatWithData(
+        datasetId,
+        promptText,
+        conversationId,
+        (event: any) => {
+          if (event.event === 'start' && event.conversation_id) {
+            setConversationId(event.conversation_id);
+          } else if (event.event === 'thought') {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      thinkingSteps: [
+                        ...(msg.thinkingSteps || []),
+                        {
+                          id: `${Date.now()}-${Math.random()}`,
+                          type: 'thought',
+                          step: event.step,
+                          content: event.content,
+                        },
+                      ],
+                    }
+                  : msg
+              )
+            );
+          } else if (event.event === 'tool_call') {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      thinkingSteps: [
+                        ...(msg.thinkingSteps || []),
+                        {
+                          id: `${Date.now()}-${Math.random()}`,
+                          type: 'tool_call',
+                          step: event.step,
+                          tool: event.tool,
+                          query: event.query,
+                        },
+                      ],
+                    }
+                  : msg
+              )
+            );
+          } else if (event.event === 'tool_result') {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      thinkingSteps: [
+                        ...(msg.thinkingSteps || []),
+                        {
+                          id: `${Date.now()}-${Math.random()}`,
+                          type: 'tool_result',
+                          step: event.step,
+                          tool: event.tool,
+                          result: {
+                            row_count: event.row_count,
+                            sample: event.sample,
+                          },
+                        },
+                      ],
+                    }
+                  : msg
+              )
+            );
+          } else if (event.event === 'final_answer') {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      text: event.message || 'Analysis complete.',
+                      sql: event.sql,
+                      visualization: event.visualization,
+                      isStreaming: false,
+                    }
+                  : msg
+              )
+            );
+          } else if (event.event === 'error') {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      text: event.error || 'Encountered an issue executing analysis.',
+                      isStreaming: false,
+                    }
+                  : msg
+              )
+            );
+          }
+        }
+      );
     } catch (err: any) {
-      const errReply: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: 'ai',
-        text: err.response?.data?.detail || 'Error executing query.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => [...prev, errReply]);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === aiMsgId
+            ? {
+                ...msg,
+                text: err.response?.data?.detail || err.message || 'Error executing query.',
+                isStreaming: false,
+              }
+            : msg
+        )
+      );
     } finally {
       setIsTyping(false);
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === aiMsgId ? { ...msg, isStreaming: false } : msg))
+      );
     }
   };
 
@@ -196,7 +299,21 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
                     : 'bg-slate-950 border border-slate-800 text-slate-200 rounded-tl-none'
                 }`}
               >
-                <MarkdownRenderer content={msg.text} />
+                {msg.sender === 'ai' && msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                  <ThinkingProcessDisclosure
+                    steps={msg.thinkingSteps}
+                    isStreaming={msg.isStreaming}
+                  />
+                )}
+
+                {msg.text && <MarkdownRenderer content={msg.text} />}
+
+                {msg.isStreaming && !msg.text && (!msg.thinkingSteps || msg.thinkingSteps.length === 0) && (
+                  <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-mono py-1">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    Thinking...
+                  </div>
+                )}
 
                 <CollapsibleQueryDetails
                   sql={msg.sql}
@@ -223,13 +340,6 @@ export const DatasetChatSidebar: React.FC<DatasetChatSidebarProps> = ({
               </div>
             </div>
           ))
-        )}
-
-        {isTyping && (
-          <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-mono animate-pulse bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
-            Analyzing dataset...
-          </div>
         )}
       </div>
 

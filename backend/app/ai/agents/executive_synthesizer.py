@@ -20,12 +20,17 @@ Detected Anomalies:
 Verified Analytical Findings & Calculated Data Points:
 {findings_json}
 
-Instructions:
-1. **Executive Summary**: Write a concise, 3-paragraph executive narrative. Paragraph 1: high-level performance and scale. Paragraph 2: primary growth/volume drivers. Paragraph 3: margin/risk friction points.
-2. **Deep-Dive Section Narratives**: For each finding, write a crisp 2-to-3 sentence analytical interpretation referencing exact numbers, top categories, and growth patterns from the calculated data.
-3. **Strategic Recommendations**: Formulate 3 distinct, high-impact business recommendations. For each, specify:
+Writing Guidelines:
+1. **Domain-Specific Vocabulary**: Use concrete industry terminology directly tied to the dataset domain (e.g. employees, turnover, and salary bands for HR; customers, churn, and MRR for SaaS; transactions, basket size, and margins for Retail).
+2. **ZERO Generic Boilerplate**: Do NOT use placeholder clichés like "operational units", "mean unit volume", "consistent operational momentum", or vague handwaving. Speak to the exact numbers, rates, and findings discovered.
+3. **Executive Summary**: Write a concise, 3-paragraph narrative:
+   - Paragraph 1: Core operational baseline, total population/volume, and primary metric distribution.
+   - Paragraph 2: Key findings, highest-risk or highest-yield cohorts, and comparative driver metrics.
+   - Paragraph 3: Strategic vulnerability points, anomalies identified, and executive imperatives.
+4. **Deep-Dive Section Narratives**: For each finding, write a crisp 2-to-3 sentence analytical interpretation referencing exact numbers, top categories, and growth patterns from the calculated data.
+5. **Strategic Recommendations**: Formulate 3 distinct, high-impact business recommendations. For each, specify:
    - `priority`: 'high', 'medium', or 'strategic'
-   - `action`: Concrete action statement
+   - `action`: Concrete operational action statement
    - `impact`: Expected business outcome or risk mitigation
 
 Return ONLY a valid JSON object matching this schema:
