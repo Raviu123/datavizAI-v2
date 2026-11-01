@@ -27,6 +27,11 @@ export const datasetApi = {
     return response.data;
   },
 
+  deleteDataset: async (datasetId: string) => {
+    const response = await apiClient.delete(`/datasets/${datasetId}`);
+    return response.data;
+  },
+
   getDatasetDetails: async (datasetId: string, limit = 100, offset = 0) => {
     const response = await apiClient.get(`/datasets/${datasetId}?limit=${limit}&offset=${offset}`);
     return response.data;

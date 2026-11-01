@@ -3,7 +3,7 @@ import uuid
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, delete
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
@@ -12,8 +12,11 @@ from app.analytics_engine.duckdb_engine import DuckDBEngine
 from app.ai.providers.factory import LLMProviderFactory
 from app.ai.prompts.strategy_prompt import SYSTEM_PROMPT, build_analysis_prompt
 from app.config import settings
-from app.db.models import DatasetModel
+from app.db.models import DatasetModel, ReportModel, ChatMessageModel
 from app.db.session import get_db
+from app.core.logging import get_logger
+
+logger = get_logger("app.api.datasets")
 
 router = APIRouter()
 
@@ -166,6 +169,51 @@ async def get_dataset(
         "profile": dataset.profile,
         "rows": paginated_rows,
         "ai_analysis": dataset.ai_analysis,
+    }
+
+
+@router.delete("/{dataset_id}")
+async def delete_dataset(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Deletes a dataset, associated executive reports, conversational chat history,
+    and removes the file from local storage.
+    """
+    stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
+    result = await db.execute(stmt)
+    dataset = result.scalar_one_or_none()
+
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    file_path = dataset.file_path
+    dataset_name = dataset.name
+
+    # 1. Remove file on disk if exists
+    try:
+        if file_path:
+            resolved_path = DuckDBEngine._resolve_file_path(file_path)
+            if resolved_path and os.path.exists(resolved_path):
+                os.remove(resolved_path)
+            elif os.path.exists(file_path):
+                os.remove(file_path)
+    except Exception as e:
+        logger.warning(f"[Dataset Delete Warning] Could not remove physical file '{file_path}': {e}")
+
+    # 2. Delete linked reports and chat messages
+    await db.execute(delete(ReportModel).where(ReportModel.dataset_id == dataset_id))
+    await db.execute(delete(ChatMessageModel).where(ChatMessageModel.dataset_id == dataset_id))
+
+    # 3. Delete dataset record
+    await db.delete(dataset)
+    await db.commit()
+
+    logger.info(f"[Dataset Deleted] ID: {dataset_id} | Name: '{dataset_name}'")
+    return {
+        "status": "success",
+        "message": f"Dataset '{dataset_name}' and all associated reports and chat history were deleted successfully."
     }
 
 
