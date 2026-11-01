@@ -33,3 +33,5 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 backend/storage/*.db
+backend/storage/datasets/*
+!backend/storage/datasets/.gitkeep
