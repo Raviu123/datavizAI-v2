@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 from app.ai.providers.factory import LLMProviderFactory
 from app.core.logging import get_logger
 
@@ -49,7 +49,8 @@ class SemanticInferrer:
     async def infer(
         dataset_name: str,
         profile: Dict[str, Any],
-        sample_rows: List[Dict[str, Any]]
+        sample_rows: List[Dict[str, Any]],
+        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         print(f"\n[Semantic Inferrer] --> Classifying semantic roles for ANY-data architecture: '{dataset_name}'...")
         logger.info(f"[Semantic Inferrer] Inferring semantics for '{dataset_name}'")
@@ -68,6 +69,13 @@ class SemanticInferrer:
                 "null_pct": c.get("null_percentage"),
                 "unique": c.get("unique_count"),
                 "sample": c.get("sample_values", [])[:3]
+            })
+
+        if on_event:
+            await on_event({
+                "type": "thought",
+                "agent": "Semantic Inferrer",
+                "thought": f"Examining schema profile ({len(cols)} columns, {len(num_cols)} numerical, {len(cat_cols)} categorical) to infer industry domain, primary continuous metric, and natural cohort dimensions."
             })
 
         provider = LLMProviderFactory.get_provider()
@@ -92,6 +100,13 @@ class SemanticInferrer:
             print(f"   [Semantic Inferrer] Primary Metric: [{primary}] | Secondary: {secondary}")
             print(f"   [Semantic Inferrer] Cohort Dimensions: {cohorts} | Temporal: {temporals}")
             print(f"   [Semantic Inferrer] Strategic Focus: \"{strategic_q}\"")
+
+            if on_event:
+                await on_event({
+                    "type": "thought",
+                    "agent": "Semantic Inferrer",
+                    "thought": f"Domain identified: '{domain}'. Primary metric selected: '{primary}' with {len(secondary)} secondary metrics and {len(cohorts)} cohort dimensions."
+                })
 
             return {
                 "domain_theme": domain,

@@ -101,6 +101,69 @@ export const reportsApi = {
     return response.data;
   },
 
+  generateReportStream: async (
+    datasetId: string,
+    onEvent: (event: any) => void,
+    signal?: AbortSignal
+  ): Promise<any> => {
+    const url = `${API_BASE_URL}/datasets/${datasetId}/reports/generate/stream`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/event-stream',
+        'Content-Type': 'application/json',
+      },
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to start report generation stream: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('ReadableStream not supported by browser.');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalReport: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop() || '';
+
+      for (const chunk of chunks) {
+        const trimmed = chunk.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+
+        if (trimmed.startsWith('data: ')) {
+          const jsonStr = trimmed.slice(6);
+          try {
+            const data = JSON.parse(jsonStr);
+            onEvent(data);
+            if (data.type === 'complete' && data.report) {
+              finalReport = data.report;
+            } else if (data.type === 'error') {
+              throw new Error(data.message || 'Pipeline encountered an error.');
+            }
+          } catch (err: any) {
+            if (err.message && err.message.startsWith('Pipeline encountered')) {
+              throw err;
+            }
+            console.warn('[SSE Parse Warning]', jsonStr, err);
+          }
+        }
+      }
+    }
+
+    return finalReport;
+  },
+
   listReports: async (datasetId: string) => {
     const response = await apiClient.get(`/datasets/${datasetId}/reports`);
     return response.data;

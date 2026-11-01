@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 from app.ai.providers.factory import LLMProviderFactory
 from app.core.logging import get_logger
 
@@ -46,10 +46,18 @@ class AnomalyScoutAgent:
     async def inspect(
         dataset_name: str,
         profile: Dict[str, Any],
-        sample_rows: List[Dict[str, Any]]
+        sample_rows: List[Dict[str, Any]],
+        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> List[Dict[str, Any]]:
         print(f"\n[Agent 1: Anomaly Scout] --> Analyzing dataset profile: '{dataset_name}' ({profile.get('total_rows', 0):,} rows)...")
         logger.info(f"[Agent 1: Anomaly Scout] Inspecting dataset '{dataset_name}'")
+
+        if on_event:
+            await on_event({
+                "type": "thought",
+                "agent": "Anomaly Scout",
+                "thought": f"Scanning {profile.get('total_columns', 0)} columns across {profile.get('total_rows', 0):,} records for distribution skewness, negative values, high cardinality, and null spikes."
+            })
 
         provider = LLMProviderFactory.get_provider()
         prompt = ANOMALY_SCOUT_PROMPT.format(
@@ -68,6 +76,13 @@ class AnomalyScoutAgent:
                 for a in anomalies:
                     severity_label = a.get("severity", "info").upper()
                     print(f"     * [{severity_label}] {a.get('title')}: {a.get('description')[:75]}...")
+                    if on_event:
+                        await on_event({
+                            "type": "anomaly_found",
+                            "agent": "Anomaly Scout",
+                            "anomaly": a,
+                            "message": f"[{severity_label}] {a.get('title')}"
+                        })
                 return anomalies
         except Exception as e:
             logger.warning(f"[Agent 1: Anomaly Scout] LLM error ({e}), generating statistical heuristic anomalies.")

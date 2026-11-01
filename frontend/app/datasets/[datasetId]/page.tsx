@@ -8,6 +8,7 @@ import { ChartEngine, VisualStrategySpec } from '@/components/charts/ChartEngine
 import { ChartCandidatePickerModal, ChartCandidate } from '@/components/shared/ChartCandidatePickerModal';
 import { ExecutionLogViewer } from '@/components/shared/ExecutionLogViewer';
 import { DatasetChatSidebar } from '@/components/shared/DatasetChatSidebar';
+import { AgentStreamingModal } from '@/components/reports/AgentStreamingModal';
 import { datasetApi, reportsApi } from '@/lib/api-client';
 import {
   FileSpreadsheet,
@@ -44,6 +45,7 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
   // Multi-Agent Reports state
   const [reports, setReports] = useState<any[]>([]);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isStreamingReportModalOpen, setIsStreamingReportModalOpen] = useState(false);
 
   // Chat Sidebar & Modal & Logging state
   const [isChatOpen, setIsChatOpen] = useState(true);
@@ -74,21 +76,14 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
     }
   };
 
-  const handleGenerateReport = async () => {
-    setIsGeneratingReport(true);
-    addLog('Triggering 5-Agent Autonomous Reporting Pipeline (Anomaly Scout -> Strategist -> DuckDB -> Chart Designer -> Synthesizer)...');
-    try {
-      const newReport = await reportsApi.generateReport(datasetId);
-      addLog(`Executive Report successfully generated: "${newReport.title}"`);
-      setReports((prev) => [newReport, ...prev]);
-      window.location.href = `/reports/${newReport.id}`;
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || 'Failed to generate report.';
-      setErrorMsg(msg);
-      addLog(`ERROR: ${msg}`);
-    } finally {
-      setIsGeneratingReport(false);
-    }
+  const handleOpenStreamingReport = () => {
+    addLog('Opening Autonomous Multi-Agent Streaming Pipeline (Semantic Inferrer -> Anomaly Scout -> ReAct Investigator -> Chart Designer -> Synthesizer -> Critic)...');
+    setIsStreamingReportModalOpen(true);
+  };
+
+  const handleReportGenerated = (newReport: any) => {
+    addLog(`Executive Report successfully generated: "${newReport.title}"`);
+    setReports((prev) => [newReport, ...prev.filter((r) => r.id !== newReport.id)]);
   };
 
   const addLog = (logMsg: string) => {
@@ -257,21 +252,11 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
             </button>
 
             <button
-              onClick={handleGenerateReport}
-              disabled={isGeneratingReport}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-purple-500/20 transition-all disabled:opacity-50 cursor-pointer"
+              onClick={handleOpenStreamingReport}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-gradient-to-r from-purple-600 via-indigo-600 to-indigo-700 hover:from-purple-500 hover:to-indigo-600 text-white text-xs font-semibold shadow-lg shadow-purple-500/20 transition-all cursor-pointer"
             >
-              {isGeneratingReport ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-purple-200" />
-                  <span>5 Agents Orchestrating...</span>
-                </>
-              ) : (
-                <>
-                  <FileText className="w-4 h-4 text-purple-200" />
-                  <span>Autonomous Executive Report</span>
-                </>
-              )}
+              <Sparkles className="w-4 h-4 text-purple-200" />
+              <span>Autonomous Executive Report</span>
             </button>
 
             <button
@@ -368,21 +353,11 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
                   </div>
 
                   <button
-                    onClick={handleGenerateReport}
-                    disabled={isGeneratingReport}
-                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-purple-600/20 transition-all cursor-pointer disabled:opacity-50"
+                    onClick={handleOpenStreamingReport}
+                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 via-indigo-600 to-indigo-700 hover:from-purple-500 hover:to-indigo-600 text-white rounded-lg text-xs font-semibold shadow-md shadow-purple-600/20 transition-all cursor-pointer"
                   >
-                    {isGeneratingReport ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Orchestrating Agents...</span>
-                      </>
-                    ) : (
-                      <>
-                        <FileText className="w-3.5 h-3.5" />
-                        <span>Generate New Dossier</span>
-                      </>
-                    )}
+                    <Sparkles className="w-3.5 h-3.5 text-purple-200" />
+                    <span>Launch Autonomous Pipeline</span>
                   </button>
                 </div>
 
@@ -436,11 +411,10 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
                       Click the button above to launch the 5-Agent pipeline and synthesize an executive intelligence briefing with PDF export.
                     </p>
                     <button
-                      onClick={handleGenerateReport}
-                      disabled={isGeneratingReport}
-                      className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-semibold rounded-lg hover:from-purple-500 hover:to-indigo-500 transition-all shadow-lg shadow-purple-500/20 cursor-pointer"
+                      onClick={handleOpenStreamingReport}
+                      className="px-4 py-2 bg-gradient-to-r from-purple-600 via-indigo-600 to-indigo-700 text-white text-xs font-semibold rounded-lg hover:from-purple-500 hover:to-indigo-600 transition-all shadow-lg shadow-purple-500/20 cursor-pointer"
                     >
-                      {isGeneratingReport ? 'Orchestrating Agents...' : 'Generate First Dossier'}
+                      Launch Autonomous Dossier Pipeline
                     </button>
                   </div>
                 )}
@@ -516,6 +490,15 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps) {
           isOpen={isLogOpen}
           onClose={() => setIsLogOpen(false)}
           onClearLogs={() => setLogs([])}
+        />
+
+        {/* Autonomous 6-Agent Live Streaming Reporting Modal */}
+        <AgentStreamingModal
+          isOpen={isStreamingReportModalOpen}
+          onClose={() => setIsStreamingReportModalOpen(false)}
+          datasetId={datasetId}
+          datasetName={dataset.name}
+          onReportGenerated={handleReportGenerated}
         />
       </div>
     </AppShell>

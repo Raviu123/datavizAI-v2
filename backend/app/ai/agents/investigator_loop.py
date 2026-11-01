@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 from app.ai.providers.factory import LLMProviderFactory
 from app.ai.agents.toolbox import ForensicToolbox
 from app.core.logging import get_logger
@@ -76,7 +76,8 @@ class AutonomousInvestigator:
         file_path: str,
         profile: Dict[str, Any],
         semantics: Dict[str, Any],
-        max_cycles: int = 6
+        max_cycles: int = 6,
+        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> List[Dict[str, Any]]:
         print(f"\n" + "="*80)
         print(f"[*] [Autonomous Investigator] --> Launching ReAct Agentic Loop on '{dataset_name}'")
@@ -95,6 +96,15 @@ class AutonomousInvestigator:
 
         for cycle in range(1, max_cycles + 1):
             print(f"\n[ReAct Cycle {cycle}/{max_cycles}]")
+
+            if on_event:
+                await on_event({
+                    "type": "cycle_start",
+                    "agent": "Forensic Investigator",
+                    "cycle": cycle,
+                    "max_cycles": max_cycles,
+                    "message": f"Investigator ReAct Loop (Cycle {cycle}/{max_cycles}): Formulating forensic hypothesis..."
+                })
 
             prompt = INVESTIGATOR_STEP_PROMPT.format(
                 dataset_name=dataset_name,
@@ -133,8 +143,24 @@ class AutonomousInvestigator:
             print(f"   [Thought] \"{thought}\"")
             print(f"   [Action]  {action}({json.dumps(params)})")
 
+            if on_event:
+                await on_event({
+                    "type": "thought",
+                    "agent": "Forensic Investigator",
+                    "cycle": cycle,
+                    "max_cycles": max_cycles,
+                    "thought": thought,
+                })
+
             if action == "conclude" or (len(verified_discoveries) >= 3 and cycle >= 4):
                 print(f"   [Concluded] Succeeded with {len(verified_discoveries)} verified discoveries.")
+                if on_event:
+                    await on_event({
+                        "type": "thought",
+                        "agent": "Forensic Investigator",
+                        "cycle": cycle,
+                        "thought": f"Sufficient forensic evidence collected ({len(verified_discoveries)} high-impact discoveries). Concluding ReAct loop."
+                    })
                 break
 
             elif action == "log_discovery":
@@ -167,10 +193,30 @@ class AutonomousInvestigator:
                     "result": f"Verified with {len(data)} data points"
                 })
 
+                if on_event:
+                    await on_event({
+                        "type": "discovery",
+                        "agent": "Forensic Investigator",
+                        "cycle": cycle,
+                        "discovery": discovery_record,
+                        "message": f"Verified Discovery #{len(verified_discoveries)}: \"{title}\""
+                    })
+
             else:
                 # Agent called a tool
                 observation = ""
                 obs_data = None
+
+                if on_event:
+                    await on_event({
+                        "type": "tool_call",
+                        "agent": "Forensic Investigator",
+                        "cycle": cycle,
+                        "action": action,
+                        "params": params,
+                        "sql": params.get("sql_query") if action == "execute_sql" else None,
+                        "message": f"Executing tool: {action}"
+                    })
 
                 if action == "execute_sql":
                     sql_to_run = params.get("sql_query") or f'SELECT * FROM dataset LIMIT 5'
@@ -197,6 +243,16 @@ class AutonomousInvestigator:
 
                 print(f"   [Observation] {observation[:110]}...")
 
+                if on_event:
+                    await on_event({
+                        "type": "tool_result",
+                        "agent": "Forensic Investigator",
+                        "cycle": cycle,
+                        "action": action,
+                        "observation": observation,
+                        "sample_data": obs_data[:3] if isinstance(obs_data, list) else None,
+                    })
+
                 history.append({
                     "cycle": cycle,
                     "thought": thought,
@@ -214,7 +270,7 @@ class AutonomousInvestigator:
                     break
                 sql = f'SELECT "{c}", SUM("{primary_met}") as "{primary_met}" FROM dataset WHERE "{c}" IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 10'
                 res = toolbox.execute_sql(sql)
-                verified_discoveries.append({
+                disc = {
                     "id": f"disc_{len(verified_discoveries) + 1}",
                     "title": f"Performance Distribution Across {c}",
                     "business_question": f"How is cumulative {primary_met} distributed across {c} segments?",
@@ -222,7 +278,15 @@ class AutonomousInvestigator:
                     "sql": sql,
                     "suggested_chart": "bar",
                     "data": res.get("data", []),
-                })
+                }
+                verified_discoveries.append(disc)
+                if on_event:
+                    await on_event({
+                        "type": "discovery",
+                        "agent": "Forensic Investigator",
+                        "discovery": disc,
+                        "message": f"Synthesized baseline discovery: \"{disc['title']}\""
+                    })
 
         print(f"\n[OK] [Autonomous Investigator] Completed ReAct Loop. Total Verified Discoveries: {len(verified_discoveries)}")
         return verified_discoveries

@@ -14,9 +14,32 @@ class DuckDBEngine:
     """
     
     @staticmethod
+    def _resolve_file_path(file_path: str) -> str:
+        """Resolves relative file path across current working directory and backend directory."""
+        if os.path.exists(file_path):
+            return file_path
+        # Check backend/ subfolder if launched from repo root
+        cand1 = os.path.join("backend", file_path.lstrip("./\\"))
+        if os.path.exists(cand1):
+            return cand1
+        # Check stripping backend/ if launched from backend directory
+        cand2 = file_path.replace("backend/", "").replace("backend\\", "").lstrip("./\\")
+        if os.path.exists(cand2):
+            return cand2
+        # Check root storage directory
+        cand3 = os.path.join("storage", "datasets", os.path.basename(file_path))
+        if os.path.exists(cand3):
+            return cand3
+        cand4 = os.path.join("backend", "storage", "datasets", os.path.basename(file_path))
+        if os.path.exists(cand4):
+            return cand4
+        return file_path
+
+    @staticmethod
     def _get_connection(file_path: str) -> duckdb.DuckDBPyConnection:
-        ext = os.path.splitext(file_path)[1].lower()
-        clean_path = str(file_path).replace("\\", "/")
+        resolved_path = DuckDBEngine._resolve_file_path(file_path)
+        ext = os.path.splitext(resolved_path)[1].lower()
+        clean_path = str(resolved_path).replace("\\", "/")
         conn = duckdb.connect(database=':memory:')
 
         try:
@@ -27,7 +50,7 @@ class DuckDBEngine:
             elif ext == '.json':
                 conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_json_auto('{clean_path}')")
             elif ext in ['.xlsx', '.xls']:
-                df = pd.read_excel(file_path)
+                df = pd.read_excel(resolved_path)
                 conn.register('dataset', df)
             else:
                 conn.execute(f"CREATE TABLE dataset AS SELECT * FROM read_csv_auto('{clean_path}')")
