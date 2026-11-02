@@ -1,7 +1,29 @@
 import axios from 'axios';
 import { getRegisteredCapabilities } from '@/components/charts/registry';
 
-const API_BASE_URL = process.env.BACKEND_URL || 'http://localhost:8000/api/v1';
+export const getApiBaseUrl = (): string => {
+  let url =
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    process.env.BACKEND_URL ||
+    'http://localhost:8000/api/v1';
+
+  url = url.trim().replace(/\/+$/, '');
+
+  // If already pointing to /api/v1 or is a relative /api/v1 path
+  if (url.endsWith('/api/v1')) {
+    return url;
+  }
+  if (url.endsWith('/api')) {
+    return `${url}/v1`;
+  }
+  if (url.startsWith('/')) {
+    return url;
+  }
+  return `${url}/api/v1`;
+};
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,

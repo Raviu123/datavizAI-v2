@@ -15,5 +15,9 @@ services:
         value: sqlite+aiosqlite:///storage/datavizai.db
       - key: LOCAL_STORAGE_PATH
         value: ./storage
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
       - key: OPENROUTER_API_KEY
         sync: false

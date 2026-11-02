@@ -1,6 +1,7 @@
-﻿import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
+import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
+import { API_BASE_URL } from "@/lib/api-client";
 
-const API_BASE_URL = process.env.BACKEND_URL ?? "http://localhost:8000/api/v1";
+export { API_BASE_URL };
 
 function createApiClient(): AxiosInstance {
   const client = axios.create({

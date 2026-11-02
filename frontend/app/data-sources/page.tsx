@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { ChartEngine } from '@/components/charts/ChartEngine';
 import { ChartCandidatePickerModal } from '@/components/shared/ChartCandidatePickerModal';
-import { liveDataSourceApi } from '@/lib/api-client';
+import { liveDataSourceApi, API_BASE_URL } from '@/lib/api-client';
 import {
   Database,
   Plus,
@@ -26,9 +26,11 @@ export default function DataSourcesPage() {
   const [sources, setSources] = useState<any[]>([]);
   const [activeSource, setActiveSource] = useState<any>(null);
   
+  const defaultShopifyMockUrl = `${API_BASE_URL}/mock/shopify/live-orders`;
+
   // Connect Form State
   const [sourceName, setSourceName] = useState('Shopify Live Webhook Simulator');
-  const [sourceUrl, setSourceUrl] = useState('http://localhost:8000/api/v1/mock/shopify/live-orders');
+  const [sourceUrl, setSourceUrl] = useState(defaultShopifyMockUrl);
   const [refreshInterval, setRefreshInterval] = useState(3);
   const [isConnecting, setIsConnecting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -116,7 +118,7 @@ export default function DataSourcesPage() {
 
   const handleUseMockShopifyPreset = () => {
     setSourceName('Shopify Real-Time Store Feed');
-    setSourceUrl('http://localhost:8000/api/v1/mock/shopify/live-orders');
+    setSourceUrl(defaultShopifyMockUrl);
   };
 
   return (
@@ -174,7 +176,7 @@ export default function DataSourcesPage() {
                 type="url"
                 value={sourceUrl}
                 onChange={(e) => setSourceUrl(e.target.value)}
-                placeholder="http://localhost:8000/api/v1/mock/shopify/live-orders"
+                placeholder={defaultShopifyMockUrl}
                 className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-indigo-500 font-mono"
                 required
               />

@@ -1,4 +1,4 @@
-﻿# DataViz AI — Frontend
+# DataViz AI — Frontend
 
 Next.js 15 + TypeScript + Tailwind CSS + TanStack Query
 
@@ -37,4 +37,9 @@ types/        - Shared TypeScript types
 
 ## Environment
 
-Copy `.env.local` and set `BACKEND_URL` to your backend URL.
+Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_BACKEND_URL` / `BACKEND_URL` to your backend URL:
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000/api/v1
+BACKEND_URL=http://localhost:8000/api/v1
+```
