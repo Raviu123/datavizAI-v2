@@ -1,6 +1,6 @@
 ﻿import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const API_BASE_URL = process.env.BACKEND_URL ?? "http://localhost:8000/api/v1";
 
 function createApiClient(): AxiosInstance {
   const client = axios.create({

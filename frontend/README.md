@@ -37,4 +37,4 @@ types/        - Shared TypeScript types
 
 ## Environment
 
-Copy `.env.local` and set `NEXT_PUBLIC_API_URL` to your backend URL.
+Copy `.env.local` and set `BACKEND_URL` to your backend URL.

@@ -8,7 +8,7 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 COPY frontend/ ./
-ENV NEXT_PUBLIC_API_URL=/api/v1
+ENV BACKEND_URL=/api/v1
 ENV DOCKER_BUILD=1
 RUN npm run build
 
